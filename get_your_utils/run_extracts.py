@@ -728,6 +728,8 @@ class Extract:
             ## Gather currently-enrolled applicants of the current program who
             ## have updated their information
             
+            raise Exception("is_updated is not working properly; a workaround needs to be put in place. See Issue #4 for details.")
+            
             # For additionalJoin:
                 # - brings in the IQ programs' information        
             
