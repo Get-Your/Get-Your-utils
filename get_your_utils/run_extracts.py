@@ -21,7 +21,6 @@ import os
 import pendulum
 import json
 import psycopg2
-import typer
 import decimal
 import re
 from tomlkit import loads
@@ -45,41 +44,11 @@ import warnings
 import coftc_cred_man as crd
 import coftc_file_utils
 
-# Create typer app
-app = typer.Typer()
-
-## Initialize global vars
-try:
-    fileDir = Path(__file__).parent
-except NameError:   # dev
-    fileDir = Path.cwd()
-    
-with open(
-        fileDir.parent.joinpath('.env.deploy'),
-        'r',
-        encoding='utf-8',
-        ) as f:
-    secrets_dict = loads(f.read())
-    
-def get_secret(var_name, read_dict=secrets_dict):
-    '''Get the secret variable or return explicit exception.'''
-    try:
-        return read_dict[var_name]
-    except tomlexceptions.NonExistentKey:
-        error_msg = f"Set the '{var_name}' secrets variable"
-        raise tomlexceptions.NonExistentKey(error_msg)
-
-STORAGE_PROD_SAS = get_secret('STORAGE_PROD_SAS')
-AZURE_CUSTOM_DOMAIN = get_secret('AZURE_CUSTOM_DOMAIN')
-AZURE_CONTAINER_NAME = get_secret('AZURE_CONTAINER_NAME')
-USER_FILES_SAVE_DIR = get_secret('USER_FILES_SAVE_DIR')
-OUTPUT_FILES_DIR = get_secret('OUTPUT_FILES_DIR')
-
 class GetFoco:
     
     def __init__(
         self,
-        output_file_dir=OUTPUT_FILES_DIR,
+        output_file_dir,
         db_profile='getfoco_prod',
         ):
         """
@@ -233,8 +202,8 @@ class Extract:
     
     def __init__(
             self,
-            output_file_dir=OUTPUT_FILES_DIR,
-            user_files_dir=USER_FILES_SAVE_DIR,
+            output_file_dir=None,
+            user_files_dir=None,
             filename_suffix='IQ Applicants.csv',
             export_type='ALL',
             interactive=False,
@@ -245,12 +214,19 @@ class Extract:
         export_type = export_type.upper()
         if not export_type in ('ALL', 'INCOME', 'PROGRAM', 'INCOMPLETE'):
             raise Exception("export_type must be 'ALL', 'INCOME', 'PROGRAM', or 'INCOMPLETE'")
+            
+        self._initialize_vars()
+        
+        if output_file_dir is None:
+            output_file_dir = self.OUTPUT_FILES_DIR
+        if user_files_dir is None:
+            user_files_dir = self.USER_FILES_SAVE_DIR
 
         self.filename_suffix = filename_suffix
         self.interactive = interactive      
         
         # Initialize params
-        self.getfoco = GetFoco(output_file_dir=output_file_dir)
+        self.getfoco = GetFoco(output_file_dir)
         self.user_files_dir = Path(user_files_dir)
         self.kwargs = kwargs
             
@@ -275,6 +251,23 @@ class Extract:
             finally:
                 self.getfoco.conn.close()   
                 pass
+            
+    def _initialize_vars(self):
+        ## Initialize global vars
+        try:
+            fileDir = Path(__file__).parent
+        except NameError:   # dev
+            fileDir = Path.cwd()
+            
+        with open(
+                fileDir.parent.joinpath('.env.deploy'),
+                'r',
+                encoding='utf-8',
+                ) as f:
+            secrets_dict = loads(f.read())
+            
+        for key in secrets_dict.keys():
+            setattr(self, key, secrets_dict[key])
     
     def run_all(self):
         """ Run *all* extracts (standard, all applicants, and app feedback).
@@ -535,11 +528,11 @@ class Extract:
             
             # Connect to the container
             blob_service_client = BlobServiceClient(
-                account_url=f"https://{AZURE_CUSTOM_DOMAIN.replace('https://', '')}",
-                credential=STORAGE_PROD_SAS,
+                account_url=f"https://{self.AZURE_CUSTOM_DOMAIN.replace('https://', '')}",
+                credential=self.STORAGE_PROD_SAS,
                 )
             container_client = blob_service_client.get_container_client(
-                container=AZURE_CONTAINER_NAME,
+                container=self.AZURE_CONTAINER_NAME,
                 )
             
             # List all blobs
