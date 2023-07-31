@@ -60,10 +60,6 @@ coverage.xml
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
-# Ignore any variation of manage.py except the base (negated at the end of this file)
-**/*manage*.py
-
-*.*.deploy
 
 # Flask stuff:
 instance/
@@ -114,6 +110,8 @@ ENV/
 *env.bak/
 *venv.bak/
 
+*.*.deploy
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -138,10 +136,5 @@ dmypy.json
 # Mac OS File System
 .DS_Store
 
-# Add back in the base manage.py
-!**/manage.py
-
-# Keep the media folder, but ignore all of
-# junk that gets added to it
-/getyour/getyour/media/*
-!/getyour/getyour/media/.gitkeep
+# Execution scripts
+**exe*
