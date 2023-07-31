@@ -1,0 +1,8 @@
+--extra-index-url https://fort-collins-enterprise.github.io/python-package-server
+pendulum~=2.1
+psycopg2~=2.9
+typer[all]~=0.9
+python-dotenv~=1.0
+azure-storage-blob~=12.11
+coftc-cred-man~=3.2
+coftc-file-utils~=2.1
