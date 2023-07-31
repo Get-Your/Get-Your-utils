@@ -675,6 +675,18 @@ class Extract:
             # Define the output fields for the extract
             outFieldList = [('','','Notes'),] + fieldsToUse
             
+            ## Gather currently-enrolled applicants of the current program who
+            ## have renewed their profile
+            
+            # To check for renewals:
+                # 1) Verify the iqprogram.applied_at timestamp is after the
+                # user.last_renewed_at timestamp
+                # 2) Check the iqprogramhist table to see if they have
+                # previously enrolled
+            
+            # TODO: Fill the renewals placeholder
+            raise NotImplementedError("Need to fill in the renewals section")            
+            
             ## Gather new applicants for the current program
             
             # For additionalJoin:
@@ -830,18 +842,8 @@ class Extract:
 
             dbOut.extend(updateOut)
             notesList.extend(['UPDATE ONLY']*len(updateOut))
-            
-            ## Gather currently-enrolled applicants of the current program who
-            ## have renewed their profile
-            
-            # To check for renewals:
-                # 1) Verify the iqprogram.applied_at timestamp is after the
-                # user.last_renewed_at timestamp
-                # 2) Check the iqprogramhist table to see if they have
-                # previously enrolled
-            
-            # TODO: Fill the renewals placeholder
-            
+
+
             if len(dbOut)>0:
                 # Convert to dataframe, using the friendly field names in outFieldList
                 # Append each element of notesList to the end of each dbOut element
