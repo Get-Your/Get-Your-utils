@@ -603,6 +603,8 @@ class Extract:
                         with open(
                                 userDir.joinpath(
                                     blobitm.name.replace(
+                                        ':',
+                                        '').replace(
                                         '{}/'.format(
                                             userFolder,
                                             ),
