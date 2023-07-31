@@ -492,7 +492,7 @@ class Extract:
             for iditm in ids_to_warn:
                 try:
                     _ = df['Primary ID'].values.index(iditm)
-                except ValueError:
+                except AttributeError:
                     pass
                 else:
                     warningList.append(iditm)
