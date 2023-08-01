@@ -16,9 +16,6 @@ if ( $proc.ExitCode -eq 0 ) {
     Write-Host "Docker service ready"
 
     ## Initialize vars
-    # Get the installation path from the current path (3x parent, then 'getyour' directory)
-    $DockerDir = $(Join-Path $(Split-Path $(Split-Path $(Split-Path $pwd))) "getyour")
-
     ## Set environment variables from the .env file
     Get-Content $(Join-Path $pwd ".env") | ForEach-Object {
         $name, $value = $_.split('=')
@@ -29,7 +26,7 @@ if ( $proc.ExitCode -eq 0 ) {
 
     ## Run the Docker build and push
     Write-Host "`nBuilding into $BuildStr..."
-    docker build -t $BuildStr $DockerDir
+    docker build -t $BuildStr $env:DEPLOY_DIR
 
     Write-Host "`nPushing to Docker hub..."
     docker push $BuildStr
