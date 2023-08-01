@@ -24,7 +24,6 @@ import psycopg2
 import decimal
 import re
 from tomlkit import loads
-from tomlkit import exceptions as tomlexceptions
 from pathlib import Path
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ClientAuthenticationError
@@ -260,7 +259,7 @@ class Extract:
             fileDir = Path.cwd()
             
         with open(
-                fileDir.parent.joinpath('.env.deploy'),
+                fileDir.parent.parent.joinpath('.env.deploy'),
                 'r',
                 encoding='utf-8',
                 ) as f:
