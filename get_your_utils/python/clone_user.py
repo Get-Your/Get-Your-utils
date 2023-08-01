@@ -141,10 +141,20 @@ if userExists:
     if not userConfirm:
         raise KeyboardInterrupt("Cancelled by user")
         
+        
+# Get the encrypted password of the target (in case this is the duplicate user)
+queryStr = sql.SQL(
+    "select {fd} from {tbl} where {idfd}=%s"
+    ).format(
+        fd=sql.SQL(', ').join(map(sql.Identifier, ['password'])),
+        tbl=sql.Identifier('public', 'app_user'),
+        idfd=sql.Identifier('email'),
+        )
+targetCursor.execute(queryStr, (passwordClone,))
+targetPassword = targetCursor.fetchone()[0]
 
-
-# Go through tables
-# Ensure 'app_user' is first, for foreign key constraints
+# Go through tables. Note that these are in the order in which they are written
+# in the app (also ensure 'app_user' is first, for foreign key constraints)
 tableList = [
     'app_user',
     'app_address',
@@ -153,6 +163,27 @@ tableList = [
     'app_eligibilityprogram',
     'app_iqprogram',
     ]
+
+# Remove the user from target (if exists) so as to get a fresh start
+if userExists:
+    # Loop through tableList backward and delete
+    for table in reversed(tableList):
+        
+        if table == 'app_user':
+            idField = 'id'
+        else:
+            idField = 'user_id'
+        
+        queryStr = sql.SQL(
+            "delete from {tbl} where {idfd}=%s"
+            ).format(
+                tbl=sql.Identifier('public', table),
+                idfd=sql.Identifier(idField),
+                )
+        targetCursor.execute(queryStr, (userId,))
+        
+    # Commit all deletions
+    targetConn.commit()
 
 # Copy user from source to target databases
 for table in tableList:
@@ -199,16 +230,8 @@ for table in tableList:
         # Set email to new version
         dbOut[fieldList.index('email')] = newEmail
         
-        # Get the encrypted password of the target and set the value
-        queryStr = sql.SQL(
-            "select {fd} from {tbl} where {idfd}=%s"
-            ).format(
-                fd=sql.SQL(', ').join(map(sql.Identifier, ['password'])),
-                tbl=sql.Identifier('public', table),
-                idfd=sql.Identifier('email'),
-                )
-        targetCursor.execute(queryStr, (passwordClone,))
-        dbOut[fieldList.index('password')] = targetCursor.fetchone()[0]
+        # Set to password value to the target password gathered above
+        dbOut[fieldList.index('password')] = targetPassword
         
         # Change phone number to unused (to prevent notifications)
         dbOut[fieldList.index('phone_number')] = '+13035551234'
@@ -282,43 +305,33 @@ for table in tableList:
             # Use the target ID instead of the source (regardless of the insert)
             dbOut[fieldList.index(addtype)] = targetAddrId
     
-    if userExists:  # use an update instead of insert
+    # Insert into the target table
+    if idField == 'id':     # this is the primary key and is ignored above, so
+                            # must be added here
+        queryStr = sql.SQL(
+            "insert into {tbl} ({fd}) VALUES ({vl})"
+            ).format(
+                fd=sql.SQL(', ').join(map(sql.Identifier, fieldList+[idField])),
+                tbl=sql.Identifier('public', table),
+                vl=sql.SQL(', ').join(sql.Placeholder()*len(fieldList+[idField])),
+                )
         targetCursor.execute(
-            sql.SQL(
-                "update {tbl} set {fdvl} where {idfd}={idvl}"
-                ).format(
-                    tbl=sql.Identifier('public', table),
-                    fdvl=sql.SQL(', ').join(sql.Composed([sql.Identifier(x), sql.SQL('='), sql.Placeholder()]) for x in fieldList),
-                    idfd=sql.Identifier(idField),
-                    idvl=sql.Placeholder(),
-                    ),
-            [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)]+[userId]
+            queryStr,
+            [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)]+[userId],
             )
-
+        
     else:
-        if idField == 'id':     # this is the primary key and is ignored above
-            targetCursor.execute(
-                sql.SQL(
-                    "insert into {tbl} ({fd}) VALUES ({vl}) "
-                    ).format(
-                        tbl=sql.Identifier('public', table),
-                        fd=sql.SQL(', ').join(map(sql.Identifier,fieldList+[idField])),
-                        vl=sql.SQL(', ').join(sql.Placeholder()*len(fieldList+[idField])),
-                        ),
-                [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)]+[userId],
+        queryStr = sql.SQL(
+            "insert into {tbl} ({fd}) VALUES ({vl})"
+            ).format(
+                fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
+                tbl=sql.Identifier('public', table),
+                vl=sql.SQL(', ').join(sql.Placeholder()*len(fieldList)),
                 )
-            
-        else:
-            targetCursor.execute(
-                sql.SQL(
-                    "insert into {tbl} ({fd}) VALUES ({vl})"
-                    ).format(
-                        tbl=sql.Identifier('public', table),
-                        fd=sql.SQL(', ').join(map(sql.Identifier,fieldList)),
-                        vl=sql.SQL(', ').join(sql.Placeholder()*len(fieldList)),
-                        ),
-                [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)],
-                )
+        targetCursor.execute(
+            queryStr,
+            [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)],
+            )
             
 targetConn.commit()
     
