@@ -17,25 +17,36 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-import os
 from psycopg2 import connect as psqlconnect
-from psycopg2 import sql, extensions
-from dotenv import load_dotenv
+from psycopg2 import sql
+from tomlkit import loads
+from tomlkit import exceptions as tomlexceptions
 from pathlib import Path
+import json
+from rich.prompt import Prompt, Confirm
 
 import coftc_cred_man as crd
 
+## Initialize vars
 try:
     fileDir = Path(__file__).parent
 except NameError:   # dev
     fileDir = Path.cwd()
-
-
-raise Exception("DON'T USE THIS SCRIPT UNTIL THE REARCHITECTURE/REFACTOR IS COMPLETE")
-
-## Initialize vars
-load_dotenv(fileDir.parent.joinpath('.env'))
-PASSWORD_CLONE_ACCOUNT = os.getenv('PASSWORD_CLONE_ACCOUNT')
+    
+with open(
+    fileDir.parent.parent.joinpath('.env.deploy'),
+    'r',
+    encoding='utf-8',
+    ) as f:
+        secrets_dict = loads(f.read())
+    
+def get_secret(var_name, read_dict=secrets_dict):
+    '''Get the secret variable or return explicit exception.'''
+    try:
+        return read_dict[var_name]
+    except tomlexceptions.NonExistentKey:
+        error_msg = f"Set the '{var_name}' secrets variable"
+        raise tomlexceptions.NonExistentKey(error_msg)
 
 # # Gather source and target databases (target is always dev)
 # dbSourceEnv = input("Enter the database environment (prod or dev): ")
@@ -49,14 +60,16 @@ else:
     raise TypeError('Database environment not recognized')
 targetProfile = 'getfoco_dev'
     
-oldEmail = input("Enter the email address of the user to clone: ")
+oldEmail = Prompt.ask("Enter the email address of the user to clone")
     
-newEmail = input("Enter an email address for the cloned user: ")
+newEmail = Prompt.ask("Enter an email address for the cloned user (note that this email may be sent communications from the app)")
 
-passwordClone = PASSWORD_CLONE_ACCOUNT
-print("\nThe password will be the same as user '{}' on getfoco.fcgov.com\n".format(
-    passwordClone,
-    ))
+passwordClone = get_secret('PASSWORD_CLONE_ACCOUNT')
+print(
+    "\nThe password will be the same as user '{}'\n".format(
+        passwordClone,
+        )
+    )
 
 
 # Connect to the dbs
@@ -87,96 +100,88 @@ targetConn = psqlconnect(
 targetCursor = targetConn.cursor()
 
 # Gather user id from source table
-srcCursor.execute(f"select id from application_user where email='{oldEmail}'")
+queryStr = sql.SQL(
+    "select {fd} from {tbl} where lower({idfd})=%s"
+    ).format(
+        fd=sql.SQL(', ').join(map(sql.Identifier, ['id'])),
+        tbl=sql.Identifier('public', 'app_user'),
+        idfd=sql.Identifier('email'),
+        )
+srcCursor.execute(queryStr, (oldEmail.lower(),))
 userId = [x[0] for x in srcCursor.fetchall()]
 if len(userId)>1:
     raise AttributeError("More than one id exists for this user")
-
 userId = userId[0]
 
 # Check if user exists in target (dev) database
-targetCursor.execute(
-    sql.SQL(
-        "select count(*) from application_user where id={}".format(
-            userId,
-            )
+queryStr = sql.SQL(
+    "select count(*) from {tbl} where {idfd}=%s"
+    ).format(
+        tbl=sql.Identifier('public', 'app_user'),
+        idfd=sql.Identifier('id'),
         )
-    )
+targetCursor.execute(queryStr, (userId,))
 userExists = True if targetCursor.fetchone()[0]>0 else False
+
 if userExists:
-    
-    targetCursor.execute(
-        sql.SQL(
-            """select "email" from application_user where id=%s"""
-            ),
-        (userId,),
-        )
+    queryStr = sql.SQL(
+        "select {fd} from {tbl} where {idfd}=%s"
+        ).format(
+            fd=sql.SQL(', ').join(map(sql.Identifier, ['email'])),
+            tbl=sql.Identifier('public', 'app_user'),
+            idfd=sql.Identifier('id'),
+            )
+    targetCursor.execute(queryStr, (userId,))
     duplicateEmail = targetCursor.fetchone()[0]
     
-    userInput = input(
-        "User exists in dev tables (under {}). Okay to overwrite? (Y/n): ".format(
-            duplicateEmail,
-            )
+    userConfirm = Confirm.ask(
+        f"User exists in dev tables (under [green]{duplicateEmail}[/green]). Okay to overwrite?"
         )
     
-    if userInput.lower() not in ('', 'y'):
+    if not userConfirm:
         raise KeyboardInterrupt("Cancelled by user")
         
 
 
 # Go through tables
-# The file-related tables (that can have multiple files - and therefore
-# records) are commented out, as these shouldn't affect anything that would
-# be tested by cloning
-
-# Ensure 'application_user' is first, for foreign key constraints
+# Ensure 'app_user' is first, for foreign key constraints
 tableList = [
-    'application_user',
-    'application_moreinfo',
-    'application_programs',
-    'application_addressverification',
-    'application_attestations',
-    'application_eligibility',
-    # 'application_user_address_files',
-    # 'application_user_files',
-    'dashboard_taxinformation',
-    'application_addresses',
-    'dashboard_form',
-    # 'dashboard_residencyform',
+    'app_user',
+    'app_address',
+    'app_household',
+    'app_householdmembers',
+    'app_eligibilityprogram',
+    'app_iqprogram',
     ]
 
 # Copy user from source to target databases
 for table in tableList:
     
-    srcCursor.execute(
-        sql.SQL(
-            "SELECT column_name FROM information_schema.columns WHERE table_name=%s and column_name!='id'"
-            ).format(
-                tbl=sql.Identifier(table),
-                ),
-            (table,),
-        )
+    queryStr = sql.SQL(
+        "select {fd} from {tbl} where {tbfd}=%s and {idfd}!='id'"
+        ).format(
+            fd=sql.SQL(', ').join(map(sql.Identifier, ['column_name'])),
+            tbl=sql.Identifier('information_schema', 'columns'),
+            tbfd=sql.Identifier('table_name'),
+            idfd=sql.Identifier('column_name'),
+            )
+    srcCursor.execute(queryStr, (table,))
     fieldList = [x[0] for x in srcCursor.fetchall()]
     
-    if table in ('application_user_files', 'application_user_address_files'):
-        idField = 'user_id'
-    elif table == 'application_user':
+    if table == 'app_user':
         idField = 'id'
     else:
-        idField = 'user_id_id'
+        idField = 'user_id'
     
     # Gather source data
-    srcCursor.execute(
-        sql.SQL(
-            "select {fd} from {tbl} where {idfd}=%s"
-            ).format(
-                fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
-                tbl=sql.Identifier(table),
-                idfd=sql.Identifier(idField),
-                ),
-                (userId,),
+    queryStr = sql.SQL(
+        "select {fd} from {tbl} where {idfd}=%s"
+        ).format(
+            fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
+            tbl=sql.Identifier('public', table),
+            idfd=sql.Identifier(idField),
             )
-    
+    srcCursor.execute(queryStr, (userId,))
     try:
         dbOut = list(srcCursor.fetchone())
     except TypeError as err:   # should be due to no records existing
@@ -189,37 +194,105 @@ for table in tableList:
         continue
     
     # Alter email and password, if applicable
-    if table == 'application_user':
+    if table == 'app_user':
         
+        # Set email to new version
         dbOut[fieldList.index('email')] = newEmail
         
-        srcCursor.execute(
-            sql.SQL(
-                """select "password" from {tbl} where {emlfd}=%s"""
-                ).format(
-                    tbl=sql.Identifier(table),
-                    emlfd=sql.Identifier('email'),
-                    ),
-                    (passwordClone,),
-            )
-        dbOut[fieldList.index('password')] = srcCursor.fetchone()[0]
+        # Get the encrypted password of the target and set the value
+        queryStr = sql.SQL(
+            "select {fd} from {tbl} where {idfd}=%s"
+            ).format(
+                fd=sql.SQL(', ').join(map(sql.Identifier, ['password'])),
+                tbl=sql.Identifier('public', table),
+                idfd=sql.Identifier('email'),
+                )
+        targetCursor.execute(queryStr, (passwordClone,))
+        dbOut[fieldList.index('password')] = targetCursor.fetchone()[0]
         
         # Change phone number to unused (to prevent notifications)
         dbOut[fieldList.index('phone_number')] = '+13035551234'
         
+    # Ensure the matching address(es) exist and use the target IDs
+    elif table == 'app_address':
+        
+        for addtype in ['eligibility_address_id', 'mailing_address_id']:
+            # Gather address
+            queryStr = sql.SQL(
+                "select {fd} from {tbl} where {idfd}=%s"
+                ).format(
+                    fd=sql.SQL(', ').join(map(sql.Identifier, ['address_sha1'])),
+                    tbl=sql.Identifier('public', 'app_addressrd'),
+                    idfd=sql.Identifier('id'),
+                    )
+            srcCursor.execute(queryStr, (dbOut[fieldList.index(addtype)],))
+            sha1Val = srcCursor.fetchone()[0]
+            
+            # Take the address ID from the target if exists; else create and
+            # use that ID
+            queryStr = sql.SQL(
+                "select {fd} from {tbl} where {idfd}=%s"
+                ).format(
+                    fd=sql.SQL(', ').join(map(sql.Identifier, ['id'])),
+                    tbl=sql.Identifier('public', 'app_addressrd'),
+                    idfd=sql.Identifier('address_sha1'),
+                    )
+            targetCursor.execute(queryStr, (sha1Val,))
+            try:
+                targetAddrId = targetCursor.fetchone()[0]
+            except TypeError:   # address DNE; add it
+                # Get AddressRD info
+                queryStr = sql.SQL(
+                    "select {fd} from {tbl} where {tbfd}=%s and {idfd}!='id'"
+                    ).format(
+                        fd=sql.SQL(', ').join(map(sql.Identifier, ['column_name'])),
+                        tbl=sql.Identifier('information_schema', 'columns'),
+                        tbfd=sql.Identifier('table_name'),
+                        idfd=sql.Identifier('column_name'),
+                        )
+                srcCursor.execute(queryStr, ("app_addressrd",))
+                addrFieldList = [x[0] for x in srcCursor.fetchall()]
+                
+                # Gather source data
+                srcCursor.execute(
+                    sql.SQL(
+                        """select {fd} from {tbl} where "id"=%s"""
+                        ).format(
+                            fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
+                            tbl=sql.Identifier('public', 'app_addressrd'),
+                            ),
+                            (dbOut[fieldList.index(addtype)],),
+                        )
+                srcAddrOut = list(srcCursor.fetchone())
+                
+                # Insert address into target DB and return the proper ID
+                queryStr = sql.SQL(
+                    "insert into {tbl} ({fd}) VALUES ({vl}) returning ID"
+                    ).format(
+                        fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
+                        tbl=sql.Identifier('public', 'app_addressrd'),
+                        vl=sql.SQL(', ').join(sql.Placeholder()*len(addrFieldList)),
+                        )
+                targetCursor.execute(queryStr, srcAddrOut)
+                targetAddrId = targetCursor.fetchone()[0]
+                
+                # Commit this insert so the foreign keys will behave
+                targetConn.commit()
+                
+            # Use the target ID instead of the source (regardless of the insert)
+            dbOut[fieldList.index(addtype)] = targetAddrId
     
     if userExists:  # use an update instead of insert
         targetCursor.execute(
             sql.SQL(
                 "update {tbl} set {fdvl} where {idfd}={idvl}"
                 ).format(
-                    tbl=sql.Identifier(table),
+                    tbl=sql.Identifier('public', table),
                     fdvl=sql.SQL(', ').join(sql.Composed([sql.Identifier(x), sql.SQL('='), sql.Placeholder()]) for x in fieldList),
                     idfd=sql.Identifier(idField),
                     idvl=sql.Placeholder(),
                     ),
-            # dependentInformation is a weird one, so use AsIs for it
-            [f'"{extensions.AsIs(x)}"' if fieldList[idx]=='dependentInformation' else x for idx,x in enumerate(dbOut)]+[userId]
+            [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)]+[userId]
             )
 
     else:
@@ -228,12 +301,11 @@ for table in tableList:
                 sql.SQL(
                     "insert into {tbl} ({fd}) VALUES ({vl}) "
                     ).format(
-                        tbl=sql.Identifier(table),
+                        tbl=sql.Identifier('public', table),
                         fd=sql.SQL(', ').join(map(sql.Identifier,fieldList+[idField])),
                         vl=sql.SQL(', ').join(sql.Placeholder()*len(fieldList+[idField])),
                         ),
-                # dependentInformation is a weird one, so use AsIs for it
-                [f'"{extensions.AsIs(x)}"' if fieldList[idx]=='dependentInformation' else x for idx,x in enumerate(dbOut)]+[userId],
+                [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)]+[userId],
                 )
             
         else:
@@ -241,15 +313,14 @@ for table in tableList:
                 sql.SQL(
                     "insert into {tbl} ({fd}) VALUES ({vl})"
                     ).format(
-                        tbl=sql.Identifier(table),
+                        tbl=sql.Identifier('public', table),
                         fd=sql.SQL(', ').join(map(sql.Identifier,fieldList)),
                         vl=sql.SQL(', ').join(sql.Placeholder()*len(fieldList)),
                         ),
-                # dependentInformation is a weird one, so use AsIs for it
-                [f'"{extensions.AsIs(x)}"' if fieldList[idx]=='dependentInformation' else x for idx,x in enumerate(dbOut)],
+                [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)],
                 )
             
-    targetConn.commit()
+targetConn.commit()
     
 print('User cloned!')
 print('email: {}'.format(newEmail))
