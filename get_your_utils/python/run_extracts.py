@@ -270,13 +270,18 @@ class Extract:
             
     def _mark_updates(
             self,
-            cursor,
-            field_list,
-            record_list,
-            ) -> list:
+            cursor: psycopg2.extensions.cursor,
+            field_list: list,
+            record_list: list,
+            ) -> (list, list):
         """
-        Mark each record in record_list with any updates and output *only those
-        records that contain updates*.
+        Mark each record in record_list with any updates and output all
+        records.
+        
+        While all input records are included in the output, records that have
+        been updated will only include *values* that are either identifying or
+        have been updated (or both). Non-updated records will pass through from
+        the input.
 
         Parameters
         ----------
@@ -294,18 +299,17 @@ class Extract:
 
         Returns
         -------
-        list
-            List of records marked with any updates.
+        (list, list)
+            Returns the list of records and a list of Booleans describing
+            which records have been updated (True === the matching index has
+            been updated), respectively.
 
         """
 
-        # For each user in record_list, find the information that changed
-        # and prepend 'UPDATE ONLY: ' in the extract
-        # Use the old information for the 'primary id', 'first name', 
-        # 'last name', and 'email' ONLY
         idFieldIdx = next(iter(inidx for inidx,x in enumerate(field_list) if x[1]=='id'))
         truncFieldsToUse = [x[:2] for x in field_list]
-        updates_list = []   # initialize output list
+        isUpdatedList = [False]*len(record_list)    # initialize the output
+                                                    # list of bools
         
         for idxitm,itm in enumerate(record_list):
             # Gather the table(s) that were updated
@@ -431,8 +435,6 @@ class Extract:
                             else:
                                 updatedVals.append(None)
                         else:
-                        # Once removed, also remove the block below with 
-                        # the same comment header
                         ############
                         
                             iteritm.update({'modifier': 'NEW VALUE: '})
@@ -440,16 +442,11 @@ class Extract:
                     else:
                         updatedVals.append(f"OLD VALUE: {updatedFieldVal[1]}, NEW VALUE: {iteritm}" if updatedFieldVal[1] is not None else f"NEW VALUE: {iteritm}")
                         
-            ############
-            # Workaround to account for is_updated being set
-            # each time /household_members is visited (see
-            # https://github.com/Get-Your/Get-Your-utils/issues/4
-            # for details). Continued from above, this excludes updatedVals
-            # that are all NULLs
             if not all(x is None for idx,x in enumerate(updatedVals) if idx not in nonUpdatedIdxToKeep):
-            ############
-        
-                updates_list[idxitm] = tuple(updatedVals)
+                record_list[idxitm] = tuple(updatedVals)
+                isUpdatedList[idxitm] = True
+                
+        return (record_list, isUpdatedList)
     
     def run_all(self):
         """ Run *all* extracts (standard, all applicants, and app feedback).
@@ -946,11 +943,19 @@ class Extract:
             cursor.execute(updatedInfoQuery)
             updateOut = cursor.fetchall()
             
-            updateOut = self._mark_updates(cursor, fieldsToUse, updateOut)
+            # For each user in updateOut, find the information that changed
+            # and prepend 'UPDATE ONLY: ' in the extract
+            recordsOut, updatedBools = self._mark_updates(
+                cursor,
+                fieldsToUse,
+                updateOut,
+                )
 
-            dbOut.extend(updateOut)
-            notesList.extend(['UPDATE ONLY']*len(updateOut))
-
+            # Use updatedBools to remove records with erroneous is_updated val
+            updateList = [x for x,y in zip(recordsOut, updatedBools) if y]
+            
+            dbOut.extend(updateList)
+            notesList.extend(['UPDATE ONLY']*len(updateList))
 
             if len(dbOut)>0:
                 # Convert to dataframe, using the friendly field names in outFieldList
