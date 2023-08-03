@@ -849,6 +849,10 @@ class Extract:
         # is_updated reset for all applicable tables after extracts are saved
         # (because any updates will have been part of the applicable extracts)
         allAffectedUsers = []
+        
+        # Keep running list of users that were processed in previous steps (to
+        # ignore in subsequent steps)
+        alreadyProcessedUsers = []
         for _,programname,friendlyname in self.getfoco.active_programs:
             
             # Initialize dbOut (there will be multiple queries) and their
@@ -869,6 +873,9 @@ class Extract:
             
             # Define the output fields for the extract
             outFieldList = [('','','Notes'),] + fieldsToUse
+            
+            # Find the index of the 'id' field for later reference
+            idFieldIdx = next(iter(inidx for inidx,x in enumerate(fieldsToUse) if x[1]=='id'))
             
             ## Gather currently-enrolled applicants of the current program who
             ## have renewed their profile
@@ -898,7 +905,7 @@ class Extract:
                 right join (select * from public.app_iqprogram ii
                     left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
                 """,
-                wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}'""".format(
+                wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' """.format(
                     prg=programname,
                     ),
                 fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
@@ -919,6 +926,7 @@ class Extract:
             
             dbOut.extend(newOut)
             notesList.extend([None]*len(newOut))
+            alreadyProcessedUsers.extend([x[idFieldIdx] for x in newOut])
             
             ## Gather currently-enrolled applicants of the current program who
             ## have updated their information
@@ -934,9 +942,10 @@ class Extract:
                 right join (select * from public.app_iqprogram ii
                     left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
                 """,
-                wherePlaceholder=self.getfoco.where_framework + """ and i."is_enrolled"=true and i."program_name"='{prg}' and ({upd})""".format(
+                wherePlaceholder=self.getfoco.where_framework + """ and i."is_enrolled"=true and i."program_name"='{prg}' and ({upd}) and u."id" not in ({prc})""".format(
                     prg=programname,
-                    upd='or '.join([f"""{x}."is_updated" """ for x in set([x[0] for x in fieldsToUse])])
+                    upd='or '.join([f"""{x}."is_updated" """ for x in set([x[0] for x in fieldsToUse])]),
+                    prc=', '.join([str(x) for x in alreadyProcessedUsers]),
                     ),
                 fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
                 )
@@ -956,6 +965,7 @@ class Extract:
             
             dbOut.extend(updateList)
             notesList.extend(['UPDATE ONLY']*len(updateList))
+            alreadyProcessedUsers.extend([x[idFieldIdx] for x in updateList])
 
             if len(dbOut)>0:
                 # Convert to dataframe, using the friendly field names in outFieldList
