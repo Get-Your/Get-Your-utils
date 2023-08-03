@@ -743,8 +743,6 @@ class Extract:
             ## Gather currently-enrolled applicants of the current program who
             ## have updated their information
             
-            raise Exception("is_updated is not working properly; a workaround needs to be put in place. See Issue #4 for details.")
-            
             # For additionalJoin:
                 # - brings in the IQ programs' information        
             
@@ -850,12 +848,68 @@ class Extract:
                     else:
                         # If this is the JSON value, insert 'NEW VALUE' as a key
                         if isinstance(iteritm, dict):
-                            iteritm.update({'modifier': 'NEW VALUE: '})
-                            updatedVals.append(iteritm)
+                            
+                            ############
+                            # Workaround to account for is_updated being set
+                            # each time /household_members is visited (see
+                            # https://github.com/Get-Your/Get-Your-utils/issues/4
+                            # for details). If this isn't an actually-updated
+                            # field, this copies the functionality of the
+                            # StopIteration case
+                            
+                            # Verify this is the jsonIdx value (calculated above)
+                            if iteridx != jsonIdx:  # shouldn't exist
+                                raise Exception("is_updated workaround: JSON value found that isn't from app_householdmembers")
+                                
+                            # Re-gather the historical values
+                            cursor.execute(
+                                # Use only the *latest* historical record
+                                """select "historical_values" from "public"."app_householdmembershist" where "user_id"={usr} order by "created" desc limit 1""".format(
+                                    usr=itm[idFieldIdx],
+                                    )
+                                )
+                            histOut = cursor.fetchone()[0]
+                            
+                            # Build new dicts with just name and birthdate
+                            # (since that's what we care about for the updates)
+                            iterCheck = [
+                                {
+                                    key: listitm[key] for key in ['name', 'birthdate']
+                                    }
+                                for listitm in iteritm['persons_in_household']
+                                ]
+                            histCheck = [
+                                {
+                                    key: listitm[key] for key in ['name', 'birthdate']
+                                    }
+                                for listitm in histOut['household_info']['persons_in_household']
+                                ]
+                            
+                            if iterCheck == histCheck:
+                                if iteridx in nonUpdatedIdxToKeep:
+                                    updatedVals.append(iteritm)
+                                else:
+                                    updatedVals.append(None)
+                            else:
+                            # Once removed, also remove the block below with 
+                            # the same comment header
+                            ############
+                            
+                                iteritm.update({'modifier': 'NEW VALUE: '})
+                                updatedVals.append(iteritm)
                         else:
                             updatedVals.append(f"OLD VALUE: {updatedFieldVal[1]}, NEW VALUE: {iteritm}" if updatedFieldVal[1] is not None else f"NEW VALUE: {iteritm}")
+                            
+                ############
+                # Workaround to account for is_updated being set
+                # each time /household_members is visited (see
+                # https://github.com/Get-Your/Get-Your-utils/issues/4
+                # for details). Continued from above, this excludes updatedVals
+                # that are all NULLs
+                if not all(x is None for idx,x in enumerate(updatedVals) if idx not in nonUpdatedIdxToKeep):
+                ############
 
-                updateOut[idxitm] = tuple(updatedVals)
+                    updateOut[idxitm] = tuple(updatedVals)
 
             dbOut.extend(updateOut)
             notesList.extend(['UPDATE ONLY']*len(updateOut))
