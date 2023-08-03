@@ -436,11 +436,27 @@ class Extract:
                 left join public.app_eligibilityprogramrd ier on ie.program_id=ier.id where ier.is_active=true and ie.document_path='')""",
             )
         cursor.execute(queryStr)
-        dbOut = cursor.fetchall()
+        dbInitOut = cursor.fetchall()
         
-        if len(dbOut)>0:
-            # Add empty 'modifier' key to 'household_info' JSON values
+        if len(dbInitOut)>0:
+            
+            # Gather the index of the JSON data
             jsonIdx = next(iter(idx for idx,x in enumerate(self.getfoco.table_fields) if x[1]=='household_info'))
+            
+            ############
+            # Workaround to account for change in identification file upload
+            # (see https://github.com/Get-Your/Get-Your-utils/issues/12 for
+            # details). This will write dbOut based on whether
+            # identification_path exists in the JSON keys
+            dbOut = []
+            for idx,itm in enumerate(dbInitOut):
+                if all('identification_path' in x.keys() for x in itm[jsonIdx]['persons_in_household']):
+                    dbOut.append(itm)
+            # Once removed, rename dbInitOut to dbOut
+            ############
+            
+            # Add empty 'modifier' key to 'household_info' JSON values (empty
+            # indicates 'not a new value')
             for idx,itm in enumerate(dbOut):
                 itm[jsonIdx].update({'modifier': ''})
                 dbOut[idx] = tuple(list(itm[:jsonIdx])+[itm[jsonIdx]]+list(itm[jsonIdx+1:]))
@@ -711,7 +727,7 @@ class Extract:
             newOut = cursor.fetchall()
             
             # Add empty 'modifier' key to 'household_info' JSON values, if
-            # applicable
+            # applicable (empty indicates 'not a new value')
             try:
                 jsonIdx = next(iter(idx for idx,x in enumerate(fieldsToUse) if x[1]=='household_info'))
             except StopIteration:
