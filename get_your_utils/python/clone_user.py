@@ -214,7 +214,8 @@ for table in tableList:
             )
     srcCursor.execute(queryStr, (userId,))
     try:
-        dbOut = list(srcCursor.fetchone())
+        # Convert inner tuples to lists for mutability
+        dbOut = [list(x) for x in srcCursor.fetchall()]
     except TypeError as err:   # should be due to no records existing
         print(
             "Error copying table '{}': {}.".format(
@@ -224,20 +225,31 @@ for table in tableList:
             )
         continue
     
+    if len(dbOut) == 0:
+        continue
+    
     # Alter email and password, if applicable
     if table == 'app_user':
         
+        # Should only be one record (that will be modified below)
+        if len(dbOut) > 1:
+            raise TypeError("There should only be one app_user record")
+        
         # Set email to new version
-        dbOut[fieldList.index('email')] = newEmail
+        dbOut[0][fieldList.index('email')] = newEmail
         
         # Set to password value to the target password gathered above
-        dbOut[fieldList.index('password')] = targetPassword
+        dbOut[0][fieldList.index('password')] = targetPassword
         
         # Change phone number to unused (to prevent notifications)
-        dbOut[fieldList.index('phone_number')] = '+13035551234'
+        dbOut[0][fieldList.index('phone_number')] = '+13035551234'
         
     # Ensure the matching address(es) exist and use the target IDs
     elif table == 'app_address':
+        
+        # Should only be one record (that will be modified below)
+        if len(dbOut) > 1:
+            raise TypeError("There should only be one app_address record")
         
         for addtype in ['eligibility_address_id', 'mailing_address_id']:
             # Gather address
@@ -248,7 +260,7 @@ for table in tableList:
                     tbl=sql.Identifier('public', 'app_addressrd'),
                     idfd=sql.Identifier('id'),
                     )
-            srcCursor.execute(queryStr, (dbOut[fieldList.index(addtype)],))
+            srcCursor.execute(queryStr, (dbOut[0][fieldList.index(addtype)],))
             sha1Val = srcCursor.fetchone()[0]
             
             # Take the address ID from the target if exists; else create and
@@ -284,7 +296,7 @@ for table in tableList:
                             fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
                             tbl=sql.Identifier('public', 'app_addressrd'),
                             ),
-                            (dbOut[fieldList.index(addtype)],),
+                            (dbOut[0][fieldList.index(addtype)],),
                         )
                 srcAddrOut = list(srcCursor.fetchone())
                 
@@ -303,34 +315,37 @@ for table in tableList:
                 targetConn.commit()
                 
             # Use the target ID instead of the source (regardless of the insert)
-            dbOut[fieldList.index(addtype)] = targetAddrId
+            dbOut[0][fieldList.index(addtype)] = targetAddrId
     
     # Insert into the target table
-    if idField == 'id':     # this is the primary key and is ignored above, so
-                            # must be added here
+    if idField == 'id':
+        # ID is the primary key and is ignored above, so must be added here
         queryStr = sql.SQL(
-            "insert into {tbl} ({fd}) VALUES ({vl})"
+            "insert into {tbl} ({fd}) VALUES {vl}"
             ).format(
                 fd=sql.SQL(', ').join(map(sql.Identifier, fieldList+[idField])),
                 tbl=sql.Identifier('public', table),
-                vl=sql.SQL(', ').join(sql.Placeholder()*len(fieldList+[idField])),
+                vl=sql.SQL(', ').join(sql.Placeholder()*len(dbOut)),
                 )
+        
         targetCursor.execute(
             queryStr,
-            [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)]+[userId],
+            # JSONify any dicts and convert back to list of tuples
+            [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]+[userId]) for elem in dbOut],
             )
         
     else:
         queryStr = sql.SQL(
-            "insert into {tbl} ({fd}) VALUES ({vl})"
+            "insert into {tbl} ({fd}) VALUES {vl}"
             ).format(
                 fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
                 tbl=sql.Identifier('public', table),
-                vl=sql.SQL(', ').join(sql.Placeholder()*len(fieldList)),
+                vl=sql.SQL(', ').join(sql.Placeholder()*len(dbOut)),
                 )
         targetCursor.execute(
             queryStr,
-            [json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(dbOut)],
+            # JSONify any dicts and convert back to list of tuples
+            [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]) for elem in dbOut],
             )
             
 targetConn.commit()
