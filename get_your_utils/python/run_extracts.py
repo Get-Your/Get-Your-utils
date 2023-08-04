@@ -278,10 +278,9 @@ class Extract:
         Mark each record in record_list with any updates and output all
         records.
         
-        While all input records are included in the output, records that have
-        been updated will only include *values* that are either identifying or
-        have been updated (or both). Non-updated records will pass through from
-        the input.
+        While all input records are included in the output, only the values in 
+        each record that are either identifying or have been updated (or both)
+        will be included.
 
         Parameters
         ----------
@@ -308,8 +307,8 @@ class Extract:
 
         idFieldIdx = next(iter(inidx for inidx,x in enumerate(field_list) if x[1]=='id'))
         truncFieldsToUse = [x[:2] for x in field_list]
-        isUpdatedList = [False]*len(record_list)    # initialize the output
-                                                    # list of bools
+        outputList = []    # initialize output list
+        isUpdatedList = []    # initialize the output list of bools
         
         for idxitm,itm in enumerate(record_list):
             # Gather the table(s) that were updated
@@ -385,7 +384,7 @@ class Extract:
                             except ValueError:  # index not found
                                 pass
                             else:
-                                updatedFields.extend(outVal)
+                                updatedFields.append(outVal)
                         
         
             # Define indices that weren't updated to keep in the extract
@@ -457,12 +456,21 @@ class Extract:
                             updatedVals.append(iteritm)
                     else:
                         updatedVals.append(f"OLD VALUE: {updatedFieldVal[1]}, NEW VALUE: {iteritm}" if updatedFieldVal[1] is not None else f"NEW VALUE: {iteritm}")
-                        
-            if not all(x is None for idx,x in enumerate(updatedVals) if idx not in nonUpdatedIdxToKeep):
-                record_list[idxitm] = tuple(updatedVals)
-                isUpdatedList[idxitm] = True
+                    
+            # Append the updated values to the output list. If no business
+            # values were truly updated, this will only include identifying
+            # vals
+            outputList.append(tuple(updatedVals))
+            # If any of the affected fields are actual updates, write them to
+            # the isUpdatedList for reference
+            if all(x is None for idx,x in enumerate(updatedVals) if idx not in nonUpdatedIdxToKeep):
+                isUpdatedList.append(False)
+            else:
+                isUpdatedList.append(True)
                 
-        return (record_list, isUpdatedList)
+            assert len(outputList) == len(isUpdatedList)
+                
+        return (outputList, isUpdatedList)
     
     def run_all(self):
         """ Run *all* extracts (standard, all applicants, and app feedback).
