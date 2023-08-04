@@ -162,6 +162,13 @@ tableList = [
     'app_householdmembers',
     'app_eligibilityprogram',
     'app_iqprogram',
+    
+    'app_userhist',
+    'app_addresshist',
+    'app_householdhist',
+    'app_householdmembershist',
+    'app_eligibilityprogramhist',
+    'app_iqprogramhist',
     ]
 
 # Remove the user from target (if exists) so as to get a fresh start
