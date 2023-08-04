@@ -365,11 +365,27 @@ class Extract:
                                     ]
                                 )
                     else:
-                        # If any identification fields were updated, gather
-                        # the old values as well
-                        updatedFields.extend(
-                            [(truncFieldsToUse.index((tableRef[0], x)), histOut[x]) if (tableRef[0], x) in identifyingFields else (truncFieldsToUse.index((tableRef[0], x)), None) for x in histOut.keys()]
-                            )
+                        # Loop through each key to determine what to do with it
+                        for key in histOut.keys():
+                            # If any identification fields were updated, gather
+                            # the old values as well
+                            if (tableRef[0], key) in identifyingFields:
+                                histVal = histOut[key]
+                            else:
+                                histVal =  None
+                                
+                            # Check for whether the field in question is in the
+                            # list of fields to output (truncFieldsToUse)
+                            try:
+                                outVal = (
+                                    truncFieldsToUse.index(
+                                        (tableRef[0], key)),
+                                    histVal,
+                                    )
+                            except ValueError:  # index not found
+                                pass
+                            else:
+                                updatedFields.extend(outVal)
                         
         
             # Define indices that weren't updated to keep in the extract
@@ -887,7 +903,7 @@ class Extract:
                 # previously enrolled
                 
             # TODO: Fill the renewals placeholder
-            raise NotImplementedError("Need to fill in the renewals section")
+            raise NotImplementedError("Need to fill in the renewals section")  
             
             ## Gather new applicants for the current program
             
