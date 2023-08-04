@@ -249,7 +249,6 @@ class Extract:
                 
             finally:
                 self.getfoco.conn.close()   
-                pass
             
     def _initialize_vars(self):
         ## Initialize global vars
@@ -873,16 +872,15 @@ class Extract:
         # is_updated reset for all applicable tables after extracts are saved
         # (because any updates will have been part of the applicable extracts)
         allAffectedUsers = []
-        
-        # Keep running list of users that were processed in previous steps (to
-        # ignore in subsequent steps)
-        alreadyProcessedUsers = []
         for _,programname,friendlyname in self.getfoco.active_programs:
             
             # Initialize dbOut (there will be multiple queries) and their
             # respective 'notes' (to be combined in the extract)
             dbOut = []
             notesList = []
+            # Keep running list of users for this program that were processed
+            # in previous steps (to ignore in subsequent steps)
+            alreadyProcessedUsers = []
             
             # Use different fields for certain program(s)
             if programname == 'spin':
@@ -960,9 +958,9 @@ class Extract:
                 right join (select * from public.app_iqprogram ii
                     left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
                 """,
-                wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' and u."id" not in ({prc})""".format(
+                wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' {prc}""".format(
                     prg=programname,
-                    prc=', '.join([str(x) for x in alreadyProcessedUsers]),
+                    prc="""and u."id" not in ({})""".format(', '.join([str(x) for x in alreadyProcessedUsers])) if len(alreadyProcessedUsers)>0 else "",
                     ),
                 fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
                 )
