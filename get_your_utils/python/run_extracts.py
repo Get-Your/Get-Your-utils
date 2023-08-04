@@ -910,8 +910,39 @@ class Extract:
                 # 2) Check the iqprogramhist table to see if they have
                 # previously enrolled
                 
-            # TODO: Fill the renewals placeholder
-            raise NotImplementedError("Need to fill in the renewals section")  
+            if programname == 'grocery':
+                
+                # For additionalJoin:
+                    # - brings in the IQ programs' information        
+                # Note that mailing and eligibility address verifications are
+                # checked before income verification, so they don't need to be
+                # duplicated here
+                
+                # In the where clause:
+                    # - i.is_enrolled=false filters out already-enrolled users (the
+                    # user has applied when a record exists
+                renewalApplicantQuery = self.getfoco.select_framework.format(
+                    additionalJoin="""
+                    right join (select * from public.app_iqprogram ii
+                        left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
+                    """,
+                    wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' and u."last_renewed_at" is not null and i."applied_at">u."last_renewed_at" """.format(
+                        prg=programname,
+                        ),
+                    fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
+                    )
+                cursor.execute(renewalApplicantQuery)
+                renewalOut = cursor.fetchall()
+                
+                renewalList, isUpdatedList = self._mark_updates(
+                    cursor,
+                    fieldsToUse,
+                    renewalOut,
+                    )
+
+                dbOut.extend(renewalList)
+                notesList.extend(['{} RENEWAL'.format(pendulum.now().format('YYYY'))]*len(renewalList))
+                alreadyProcessedUsers.extend([x[idFieldIdx] for x in renewalList])
             
             ## Gather new applicants for the current program
             
@@ -929,8 +960,9 @@ class Extract:
                 right join (select * from public.app_iqprogram ii
                     left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
                 """,
-                wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' """.format(
+                wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' and u."id" not in ({prc})""".format(
                     prg=programname,
+                    prc=', '.join([str(x) for x in alreadyProcessedUsers]),
                     ),
                 fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
                 )
