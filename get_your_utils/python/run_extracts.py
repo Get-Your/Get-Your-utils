@@ -249,7 +249,6 @@ class Extract:
                 
             finally:
                 self.getfoco.conn.close()   
-                pass
             
     def _initialize_vars(self):
         ## Initialize global vars
@@ -267,6 +266,210 @@ class Extract:
             
         for key in secrets_dict.keys():
             setattr(self, key, secrets_dict[key])
+            
+    def _mark_updates(
+            self,
+            cursor: psycopg2.extensions.cursor,
+            field_list: list,
+            record_list: list,
+            ) -> (list, list):
+        """
+        Mark each record in record_list with any updates and output all
+        records.
+        
+        While all input records are included in the output, only the values in 
+        each record that are either identifying or have been updated (or both)
+        will be included.
+
+        Parameters
+        ----------
+        cursor : psycopg2.extensions.cursor
+            Cursor for the database connection.
+        field_list : list
+            List of fields associated with each record element.
+        record_list : list
+            List of records from the database to check for and mark with updates.
+
+        Raises
+        ------
+        Exception
+            Raised if workaround finds an unexpected issue.
+
+        Returns
+        -------
+        (list, list)
+            Returns the list of records and a list of Booleans describing
+            which records have been updated (True === the matching index has
+            been updated), respectively.
+
+        """
+
+        idFieldIdx = next(iter(inidx for inidx,x in enumerate(field_list) if x[1]=='id'))
+        truncFieldsToUse = [x[:2] for x in field_list]
+        outputList = []    # initialize output list
+        isUpdatedList = []    # initialize the output list of bools
+        
+        for idxitm,itm in enumerate(record_list):
+            # Gather the table(s) that were updated
+            tableCheckList = list(set([x[0] for x in field_list]))
+            cursor.execute(
+                self.getfoco.select_framework.format(
+                    additionalJoin="",
+                    wherePlaceholder=self.getfoco.where_framework + """ and u."id"={}""".format(itm[idFieldIdx]),
+                    fields=', '.join([f"""{x}."is_updated" """ for x in tableCheckList]),
+                    )
+                )
+            tableCheckOut = cursor.fetchone()
+            
+            # Initialize list of updated fields and define the identifying
+            # fields to include in the extract regardless of update
+            updatedFields = []
+            identifyingFields = [
+                ('u', 'id'),
+                ('u', 'first_name'),
+                ('u', 'last_name'),
+                ('u', 'email'),
+                ]
+            for updidx,isupdated in enumerate(tableCheckOut):
+                if isupdated:
+                    # If updated, get the fields that changed and add the 
+                    # new values to the output
+                    tableRef = next(iter(x for x in self.getfoco.hist_tables if x[0]==tableCheckList[updidx]))
+                    cursor.execute(
+                        # Use only the *latest* historical record
+                        """select "{fdv}" from public.{tbl} where user_id={usr} order by "created" desc limit 1""".format(
+                            fdv=tableRef[2],
+                            tbl=tableRef[1],
+                            usr=itm[idFieldIdx],
+                            )
+                        )
+                    histOut = cursor.fetchone()[0]
+                    
+                    # Define updatedFields as (index of record_list, 
+                    # historical value) (if the historical value is an 
+                    # identifying field)
+                    
+                    # Address is the only field that stores IDs - strip
+                    # '_id' and use the mailing address (only) parts
+                    if tableCheckList[updidx] == 'am':
+                        if 'mailing_address_id' in histOut.keys():
+                            updatedFields.extend(
+                                [
+                                    (truncFieldsToUse.index((tableRef[0], 'address1')), None),
+                                    (truncFieldsToUse.index((tableRef[0], 'address2')), None),
+                                    (truncFieldsToUse.index((tableRef[0], 'city')), None),
+                                    (truncFieldsToUse.index((tableRef[0], 'state')), None),
+                                    (truncFieldsToUse.index((tableRef[0], 'zip_code')), None),
+                                    ]
+                                )
+                    else:
+                        # Loop through each key to determine what to do with it
+                        for key in histOut.keys():
+                            # If any identification fields were updated, gather
+                            # the old values as well
+                            if (tableRef[0], key) in identifyingFields:
+                                histVal = histOut[key]
+                            else:
+                                histVal =  None
+                                
+                            # Check for whether the field in question is in the
+                            # list of fields to output (truncFieldsToUse)
+                            try:
+                                outVal = (
+                                    truncFieldsToUse.index(
+                                        (tableRef[0], key)),
+                                    histVal,
+                                    )
+                            except ValueError:  # index not found
+                                pass
+                            else:
+                                updatedFields.append(outVal)
+                        
+        
+            # Define indices that weren't updated to keep in the extract
+            nonUpdatedIdxToKeep = [truncFieldsToUse.index(x[:2]) for x in identifyingFields]
+            
+            # Mark updated values as well as 'old value' for identifying
+            # fields
+            updatedVals = []
+            updatedIdx = [x[0] for x in updatedFields]
+            for iteridx,iteritm in enumerate(itm):
+                try:
+                    updatedFieldVal = next(iter(x for x in updatedFields if x[0]==iteridx))
+                except StopIteration:   # index is not in updatedFields
+                    if iteridx in nonUpdatedIdxToKeep:
+                        updatedVals.append(iteritm)
+                    else:
+                        updatedVals.append(None)
+                else:
+                    # If this is the JSON value, insert 'NEW VALUE' as a key
+                    if isinstance(iteritm, dict):
+                        
+                        ############
+                        # Workaround to account for is_updated being set
+                        # each time /household_members is visited (see
+                        # https://github.com/Get-Your/Get-Your-utils/issues/4
+                        # for details). If this isn't an actually-updated
+                        # field, this copies the functionality of the
+                        # StopIteration case
+                        
+                        # Verify this is the jsonIdx value (the household_info
+                        # field from GetFoco.table_fields)
+                        jsonIdx = next(iter(idx for idx,x in enumerate(self.getfoco.table_fields) if x[1]=='household_info'))
+                        if iteridx != jsonIdx:  # shouldn't exist
+                            raise Exception("is_updated workaround: JSON value found that isn't from app_householdmembers")
+                            
+                        # Re-gather the historical values
+                        cursor.execute(
+                            # Use only the *latest* historical record
+                            """select "historical_values" from "public"."app_householdmembershist" where "user_id"={usr} order by "created" desc limit 1""".format(
+                                usr=itm[idFieldIdx],
+                                )
+                            )
+                        histOut = cursor.fetchone()[0]
+                        
+                        # Build new dicts with just name and birthdate
+                        # (since that's what we care about for the updates)
+                        iterCheck = [
+                            {
+                                key: listitm[key] for key in ['name', 'birthdate']
+                                }
+                            for listitm in iteritm['persons_in_household']
+                            ]
+                        histCheck = [
+                            {
+                                key: listitm[key] for key in ['name', 'birthdate']
+                                }
+                            for listitm in histOut['household_info']['persons_in_household']
+                            ]
+                        
+                        if iterCheck == histCheck:
+                            if iteridx in nonUpdatedIdxToKeep:
+                                updatedVals.append(iteritm)
+                            else:
+                                updatedVals.append(None)
+                        else:
+                        ############
+                        
+                            iteritm.update({'modifier': 'NEW VALUE: '})
+                            updatedVals.append(iteritm)
+                    else:
+                        updatedVals.append(f"OLD VALUE: {updatedFieldVal[1]}, NEW VALUE: {iteritm}" if updatedFieldVal[1] is not None else f"NEW VALUE: {iteritm}")
+                    
+            # Append the updated values to the output list. If no business
+            # values were truly updated, this will only include identifying
+            # vals
+            outputList.append(tuple(updatedVals))
+            # If any of the affected fields are actual updates, write them to
+            # the isUpdatedList for reference
+            if all(x is None for idx,x in enumerate(updatedVals) if idx not in nonUpdatedIdxToKeep):
+                isUpdatedList.append(False)
+            else:
+                isUpdatedList.append(True)
+                
+            assert len(outputList) == len(isUpdatedList)
+                
+        return (outputList, isUpdatedList)
     
     def run_all(self):
         """ Run *all* extracts (standard, all applicants, and app feedback).
@@ -456,7 +659,7 @@ class Extract:
             ############
             
             # Add empty 'modifier' key to 'household_info' JSON values (empty
-            # indicates 'not a new value')
+            # indicates 'not a modified value')
             for idx,itm in enumerate(dbOut):
                 itm[jsonIdx].update({'modifier': ''})
                 dbOut[idx] = tuple(list(itm[:jsonIdx])+[itm[jsonIdx]]+list(itm[jsonIdx+1:]))
@@ -675,6 +878,9 @@ class Extract:
             # respective 'notes' (to be combined in the extract)
             dbOut = []
             notesList = []
+            # Keep running list of users for this program that were processed
+            # in previous steps (to ignore in subsequent steps)
+            alreadyProcessedUsers = []
             
             # Use different fields for certain program(s)
             if programname == 'spin':
@@ -690,6 +896,9 @@ class Extract:
             # Define the output fields for the extract
             outFieldList = [('','','Notes'),] + fieldsToUse
             
+            # Find the index of the 'id' field for later reference
+            idFieldIdx = next(iter(inidx for inidx,x in enumerate(fieldsToUse) if x[1]=='id'))
+            
             ## Gather currently-enrolled applicants of the current program who
             ## have renewed their profile
             
@@ -698,9 +907,40 @@ class Extract:
                 # user.last_renewed_at timestamp
                 # 2) Check the iqprogramhist table to see if they have
                 # previously enrolled
-            
-            # TODO: Fill the renewals placeholder
-            raise NotImplementedError("Need to fill in the renewals section")            
+                
+            if programname == 'grocery':
+                
+                # For additionalJoin:
+                    # - brings in the IQ programs' information        
+                # Note that mailing and eligibility address verifications are
+                # checked before income verification, so they don't need to be
+                # duplicated here
+                
+                # In the where clause:
+                    # - i.is_enrolled=false filters out already-enrolled users (the
+                    # user has applied when a record exists
+                renewalApplicantQuery = self.getfoco.select_framework.format(
+                    additionalJoin="""
+                    right join (select * from public.app_iqprogram ii
+                        left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
+                    """,
+                    wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' and u."last_renewed_at" is not null and i."applied_at">u."last_renewed_at" """.format(
+                        prg=programname,
+                        ),
+                    fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
+                    )
+                cursor.execute(renewalApplicantQuery)
+                renewalOut = cursor.fetchall()
+                
+                renewalList, isUpdatedList = self._mark_updates(
+                    cursor,
+                    fieldsToUse,
+                    renewalOut,
+                    )
+
+                dbOut.extend(renewalList)
+                notesList.extend(['{} RENEWAL'.format(pendulum.now().format('YYYY'))]*len(renewalList))
+                alreadyProcessedUsers.extend([x[idFieldIdx] for x in renewalList])
             
             ## Gather new applicants for the current program
             
@@ -718,8 +958,9 @@ class Extract:
                 right join (select * from public.app_iqprogram ii
                     left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
                 """,
-                wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}'""".format(
+                wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' {prc}""".format(
                     prg=programname,
+                    prc="""and u."id" not in ({})""".format(', '.join([str(x) for x in alreadyProcessedUsers])) if len(alreadyProcessedUsers)>0 else "",
                     ),
                 fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
                 )
@@ -727,7 +968,7 @@ class Extract:
             newOut = cursor.fetchall()
             
             # Add empty 'modifier' key to 'household_info' JSON values, if
-            # applicable (empty indicates 'not a new value')
+            # applicable (empty indicates 'not a modified value')
             try:
                 jsonIdx = next(iter(idx for idx,x in enumerate(fieldsToUse) if x[1]=='household_info'))
             except StopIteration:
@@ -739,6 +980,7 @@ class Extract:
             
             dbOut.extend(newOut)
             notesList.extend([None]*len(newOut))
+            alreadyProcessedUsers.extend([x[idFieldIdx] for x in newOut])
             
             ## Gather currently-enrolled applicants of the current program who
             ## have updated their information
@@ -754,9 +996,10 @@ class Extract:
                 right join (select * from public.app_iqprogram ii
                     left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
                 """,
-                wherePlaceholder=self.getfoco.where_framework + """ and i."is_enrolled"=true and i."program_name"='{prg}' and ({upd})""".format(
+                wherePlaceholder=self.getfoco.where_framework + """ and i."is_enrolled"=true and i."program_name"='{prg}' and ({upd}) and u."id" not in ({prc})""".format(
                     prg=programname,
-                    upd='or '.join([f"""{x}."is_updated" """ for x in set([x[0] for x in fieldsToUse])])
+                    upd='or '.join([f"""{x}."is_updated" """ for x in set([x[0] for x in fieldsToUse])]),
+                    prc=', '.join([str(x) for x in alreadyProcessedUsers]),
                     ),
                 fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
                 )
@@ -765,155 +1008,18 @@ class Extract:
             
             # For each user in updateOut, find the information that changed
             # and prepend 'UPDATE ONLY: ' in the extract
-            # Use the old information for the 'primary id', 'first name', 
-            # 'last name', and 'email' ONLY
-            idFieldIdx = next(iter(inidx for inidx,x in enumerate(fieldsToUse) if x[1]=='id'))
-            truncFieldsToUse = [x[:2] for x in fieldsToUse]
-            for idxitm,itm in enumerate(updateOut):
-                # Gather the table(s) that were updated
-                tableCheckList = list(set([x[0] for x in fieldsToUse]))
-                cursor.execute(
-                    self.getfoco.select_framework.format(
-                        additionalJoin="",
-                        wherePlaceholder=self.getfoco.where_framework + """ and u."id"={}""".format(itm[idFieldIdx]),
-                        fields=', '.join([f"""{x}."is_updated" """ for x in tableCheckList]),
-                        )
-                    )
-                tableCheckOut = cursor.fetchone()
-                
-                # Initialize list of updated fields and define the identifying
-                # fields to include in the extract regardless of update
-                updatedFields = []
-                identifyingFields = [
-                    ('u', 'id'),
-                    ('u', 'first_name'),
-                    ('u', 'last_name'),
-                    ('u', 'email'),
-                    ]
-                for updidx,isupdated in enumerate(tableCheckOut):
-                    if isupdated:
-                        # If updated, get the fields that changed and add the 
-                        # new values to the output
-                        tableRef = next(iter(x for x in self.getfoco.hist_tables if x[0]==tableCheckList[updidx]))
-                        cursor.execute(
-                            # Use only the *latest* historical record
-                            """select "{fdv}" from public.{tbl} where user_id={usr} order by "created" desc limit 1""".format(
-                                fdv=tableRef[2],
-                                tbl=tableRef[1],
-                                usr=itm[idFieldIdx],
-                                )
-                            )
-                        histOut = cursor.fetchone()[0]
-                        
-                        # Define updatedFields as (index of updateOut, 
-                        # historical value) (if the historical value is an 
-                        # identifying field)
-                        
-                        # Address is the only field that stores IDs - strip
-                        # '_id' and use the mailing address (only) parts
-                        if tableCheckList[updidx] == 'am':
-                            if 'mailing_address_id' in histOut.keys():
-                                updatedFields.extend(
-                                    [
-                                        (truncFieldsToUse.index((tableRef[0], 'address1')), None),
-                                        (truncFieldsToUse.index((tableRef[0], 'address2')), None),
-                                        (truncFieldsToUse.index((tableRef[0], 'city')), None),
-                                        (truncFieldsToUse.index((tableRef[0], 'state')), None),
-                                        (truncFieldsToUse.index((tableRef[0], 'zip_code')), None),
-                                        ]
-                                    )
-                        else:
-                            # If any identification fields were updated, gather
-                            # the old values as well
-                            updatedFields.extend(
-                                [(truncFieldsToUse.index((tableRef[0], x)), histOut[x]) if (tableRef[0], x) in identifyingFields else (truncFieldsToUse.index((tableRef[0], x)), None) for x in histOut.keys()]
-                                )
-                            
+            recordsOut, updatedBools = self._mark_updates(
+                cursor,
+                fieldsToUse,
+                updateOut,
+                )
 
-                # Define indices that weren't updated to keep in the extract
-                nonUpdatedIdxToKeep = [truncFieldsToUse.index(x[:2]) for x in identifyingFields]
-                
-                # Mark updated values as well as 'old value' for identifying
-                # fields
-                updatedVals = []
-                updatedIdx = [x[0] for x in updatedFields]
-                for iteridx,iteritm in enumerate(itm):
-                    try:
-                        updatedFieldVal = next(iter(x for x in updatedFields if x[0]==iteridx))
-                    except StopIteration:   # index is not in updatedFields
-                        if iteridx in nonUpdatedIdxToKeep:
-                            updatedVals.append(iteritm)
-                        else:
-                            updatedVals.append(None)
-                    else:
-                        # If this is the JSON value, insert 'NEW VALUE' as a key
-                        if isinstance(iteritm, dict):
-                            
-                            ############
-                            # Workaround to account for is_updated being set
-                            # each time /household_members is visited (see
-                            # https://github.com/Get-Your/Get-Your-utils/issues/4
-                            # for details). If this isn't an actually-updated
-                            # field, this copies the functionality of the
-                            # StopIteration case
-                            
-                            # Verify this is the jsonIdx value (calculated above)
-                            if iteridx != jsonIdx:  # shouldn't exist
-                                raise Exception("is_updated workaround: JSON value found that isn't from app_householdmembers")
-                                
-                            # Re-gather the historical values
-                            cursor.execute(
-                                # Use only the *latest* historical record
-                                """select "historical_values" from "public"."app_householdmembershist" where "user_id"={usr} order by "created" desc limit 1""".format(
-                                    usr=itm[idFieldIdx],
-                                    )
-                                )
-                            histOut = cursor.fetchone()[0]
-                            
-                            # Build new dicts with just name and birthdate
-                            # (since that's what we care about for the updates)
-                            iterCheck = [
-                                {
-                                    key: listitm[key] for key in ['name', 'birthdate']
-                                    }
-                                for listitm in iteritm['persons_in_household']
-                                ]
-                            histCheck = [
-                                {
-                                    key: listitm[key] for key in ['name', 'birthdate']
-                                    }
-                                for listitm in histOut['household_info']['persons_in_household']
-                                ]
-                            
-                            if iterCheck == histCheck:
-                                if iteridx in nonUpdatedIdxToKeep:
-                                    updatedVals.append(iteritm)
-                                else:
-                                    updatedVals.append(None)
-                            else:
-                            # Once removed, also remove the block below with 
-                            # the same comment header
-                            ############
-                            
-                                iteritm.update({'modifier': 'NEW VALUE: '})
-                                updatedVals.append(iteritm)
-                        else:
-                            updatedVals.append(f"OLD VALUE: {updatedFieldVal[1]}, NEW VALUE: {iteritm}" if updatedFieldVal[1] is not None else f"NEW VALUE: {iteritm}")
-                            
-                ############
-                # Workaround to account for is_updated being set
-                # each time /household_members is visited (see
-                # https://github.com/Get-Your/Get-Your-utils/issues/4
-                # for details). Continued from above, this excludes updatedVals
-                # that are all NULLs
-                if not all(x is None for idx,x in enumerate(updatedVals) if idx not in nonUpdatedIdxToKeep):
-                ############
-
-                    updateOut[idxitm] = tuple(updatedVals)
-
-            dbOut.extend(updateOut)
-            notesList.extend(['UPDATE ONLY']*len(updateOut))
-
+            # Use updatedBools to remove records with erroneous is_updated val
+            updateList = [x for x,y in zip(recordsOut, updatedBools) if y]
+            
+            dbOut.extend(updateList)
+            notesList.extend(['UPDATE ONLY']*len(updateList))
+            alreadyProcessedUsers.extend([x[idFieldIdx] for x in updateList])
 
             if len(dbOut)>0:
                 # Convert to dataframe, using the friendly field names in outFieldList
