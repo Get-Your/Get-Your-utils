@@ -848,7 +848,7 @@ class Extract:
 
         return(df)
         
-    def export_programs(self, save_file=True):
+    def export_programs(self):
         """
         Export the program-specific standard extracts (for individual program
         lead(s)).
@@ -862,6 +862,10 @@ class Extract:
         None.
     
         """
+        
+        # Parse kwargs; start with initialized defaults
+        save_file = True if not 'save_file' in self.kwargs.keys() else self.kwargs['save_file']
+        reset_updates = True if not 'reset_updates' in self.kwargs.keys() else self.kwargs['reset_updates']
         
         if self.getfoco.conn.closed == 1:
             self.getfoco._connect()
@@ -931,7 +935,7 @@ class Extract:
                     )
                 cursor.execute(renewalApplicantQuery)
                 renewalOut = cursor.fetchall()
-                
+
                 renewalList, isUpdatedList = self._mark_updates(
                     cursor,
                     fieldsToUse,
@@ -1136,7 +1140,7 @@ class Extract:
                 
         # Only reset is_updated values if save_file==True (to ensure the
         # extracts were exported)
-        if save_file and len(allAffectedUsers) > 0:
+        if reset_updates and save_file and len(allAffectedUsers) > 0:
             # Remove duplicates from allAffectedUsers
             allAffectedUsers = list(set(allAffectedUsers))
             
