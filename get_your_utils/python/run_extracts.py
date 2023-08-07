@@ -1150,7 +1150,7 @@ class Extract:
             # Remove duplicates from allAffectedUsers
             allAffectedUsers = list(set(allAffectedUsers))
             
-            print("REMINDER: don't delete the new exports - exports created from this script in the future won't include the same 'updated' user(s)")
+            print("Don't delete the new exports! Exports created from this script in the future won't include the same 'updated' user(s)")
             
             # Reset all is_updated values in all applicable tables
             for tableitm in self.getfoco.hist_tables:
@@ -1169,6 +1169,9 @@ class Extract:
                     )
             
             self.getfoco.conn.commit()
+            
+        else:
+            print("Update designations in the database were not reset")
 
         cursor.close()
                     
