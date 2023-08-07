@@ -48,7 +48,7 @@ class GetFoco:
     def __init__(
         self,
         output_file_dir,
-        db_profile='getfoco_prod',
+        **kwargs,
         ):
         """
         Initialize the parameters needed for getfoco-admin actions.
@@ -64,6 +64,8 @@ class GetFoco:
         None.
 
         """
+
+        db_profile = 'getfoco_prod' if not 'db_profile' in kwargs.keys() else kwargs['db_profile']
         
         # Connect to the Azure Postgres database behind the Django app
         self.cred = crd.Cred(db_profile)
@@ -225,7 +227,7 @@ class Extract:
         self.interactive = interactive      
         
         # Initialize params
-        self.getfoco = GetFoco(output_file_dir)
+        self.getfoco = GetFoco(output_file_dir, **kwargs)
         self.user_files_dir = Path(user_files_dir)
         self.kwargs = kwargs
             
