@@ -48,7 +48,7 @@ class GetFoco:
     def __init__(
         self,
         output_file_dir,
-        db_profile='getfoco_prod',
+        **kwargs,
         ):
         """
         Initialize the parameters needed for getfoco-admin actions.
@@ -64,6 +64,8 @@ class GetFoco:
         None.
 
         """
+
+        db_profile = 'getfoco_prod' if not 'db_profile' in kwargs.keys() else kwargs['db_profile']
         
         # Connect to the Azure Postgres database behind the Django app
         self.cred = crd.Cred(db_profile)
@@ -225,7 +227,7 @@ class Extract:
         self.interactive = interactive      
         
         # Initialize params
-        self.getfoco = GetFoco(output_file_dir)
+        self.getfoco = GetFoco(output_file_dir, **kwargs)
         self.user_files_dir = Path(user_files_dir)
         self.kwargs = kwargs
             
@@ -848,7 +850,7 @@ class Extract:
 
         return(df)
         
-    def export_programs(self, save_file=True):
+    def export_programs(self):
         """
         Export the program-specific standard extracts (for individual program
         lead(s)).
@@ -862,6 +864,10 @@ class Extract:
         None.
     
         """
+        
+        # Parse kwargs; start with initialized defaults
+        save_file = True if not 'save_file' in self.kwargs.keys() else self.kwargs['save_file']
+        reset_updates = True if not 'reset_updates' in self.kwargs.keys() else self.kwargs['reset_updates']
         
         if self.getfoco.conn.closed == 1:
             self.getfoco._connect()
@@ -931,16 +937,20 @@ class Extract:
                     )
                 cursor.execute(renewalApplicantQuery)
                 renewalOut = cursor.fetchall()
-                
-                renewalList, isUpdatedList = self._mark_updates(
-                    cursor,
-                    fieldsToUse,
-                    renewalOut,
-                    )
+                # Add empty 'modifier' key to 'household_info' JSON values, if
+                # applicable (empty indicates 'not a modified value')
+                try:
+                    jsonIdx = next(iter(idx for idx,x in enumerate(fieldsToUse) if x[1]=='household_info'))
+                except StopIteration:
+                    pass
+                else:
+                    for idx,itm in enumerate(renewalOut):
+                        itm[jsonIdx].update({'modifier': ''})
+                        renewalOut[idx] = tuple(list(itm[:jsonIdx])+[itm[jsonIdx]]+list(itm[jsonIdx+1:]))
 
-                dbOut.extend(renewalList)
-                notesList.extend(['{} RENEWAL'.format(pendulum.now().format('YYYY'))]*len(renewalList))
-                alreadyProcessedUsers.extend([x[idFieldIdx] for x in renewalList])
+                dbOut.extend(renewalOut)
+                notesList.extend(['{} RENEWAL'.format(pendulum.now().format('YYYY'))]*len(renewalOut))
+                alreadyProcessedUsers.extend([x[idFieldIdx] for x in renewalOut])
             
             ## Gather new applicants for the current program
             
@@ -1136,11 +1146,11 @@ class Extract:
                 
         # Only reset is_updated values if save_file==True (to ensure the
         # extracts were exported)
-        if save_file and len(allAffectedUsers) > 0:
+        if reset_updates and save_file and len(allAffectedUsers) > 0:
             # Remove duplicates from allAffectedUsers
             allAffectedUsers = list(set(allAffectedUsers))
             
-            print("REMINDER: don't delete the new exports - exports created from this script in the future won't include the same 'updated' user(s)")
+            print("Don't delete the new exports! Exports created from this script in the future won't include the same 'updated' user(s)")
             
             # Reset all is_updated values in all applicable tables
             for tableitm in self.getfoco.hist_tables:
@@ -1159,6 +1169,9 @@ class Extract:
                     )
             
             self.getfoco.conn.commit()
+            
+        else:
+            print("Update designations in the database were not reset")
 
         cursor.close()
                     
