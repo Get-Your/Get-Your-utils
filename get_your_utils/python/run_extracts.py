@@ -935,16 +935,20 @@ class Extract:
                     )
                 cursor.execute(renewalApplicantQuery)
                 renewalOut = cursor.fetchall()
+                # Add empty 'modifier' key to 'household_info' JSON values, if
+                # applicable (empty indicates 'not a modified value')
+                try:
+                    jsonIdx = next(iter(idx for idx,x in enumerate(fieldsToUse) if x[1]=='household_info'))
+                except StopIteration:
+                    pass
+                else:
+                    for idx,itm in enumerate(renewalOut):
+                        itm[jsonIdx].update({'modifier': ''})
+                        renewalOut[idx] = tuple(list(itm[:jsonIdx])+[itm[jsonIdx]]+list(itm[jsonIdx+1:]))
 
-                renewalList, isUpdatedList = self._mark_updates(
-                    cursor,
-                    fieldsToUse,
-                    renewalOut,
-                    )
-
-                dbOut.extend(renewalList)
-                notesList.extend(['{} RENEWAL'.format(pendulum.now().format('YYYY'))]*len(renewalList))
-                alreadyProcessedUsers.extend([x[idFieldIdx] for x in renewalList])
+                dbOut.extend(renewalOut)
+                notesList.extend(['{} RENEWAL'.format(pendulum.now().format('YYYY'))]*len(renewalOut))
+                alreadyProcessedUsers.extend([x[idFieldIdx] for x in renewalOut])
             
             ## Gather new applicants for the current program
             
