@@ -1084,10 +1084,14 @@ class Extract:
                         )
                     )
                 for filename in fileList:
-                    checkDf = pd.read_csv(
-                        self.getfoco.output_file_dir.joinpath(filename),
-                        encoding='latin',
-                        )
+                    try:
+                        checkDf = pd.read_csv(
+                            self.getfoco.output_file_dir.joinpath(filename),
+                            encoding='latin',
+                            )
+                    except pd.errors.ParserError:
+                        # Some issue with reading the file; go to the next
+                        continue
                     
                     # Filter for only enrolled==true
                     checkDf = checkDf[checkDf['Enrolled in Program'].apply(lambda x: x==True)]
