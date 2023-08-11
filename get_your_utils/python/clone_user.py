@@ -144,20 +144,17 @@ if userExists:
     # The user cannot be deleted if the source and target are the same or if
     # the target is PROD; in these cases, a new ID will be created, else prompt
     # for overwrite
-    if srcEnv == targetEnv or targetEnv == 'prod':
-        # If src==target or target=='prod', set user_id to None and spoof
-        # userExists to False to designate that the source will not be deleted
+    if srcEnv != targetEnv and targetEnv != 'prod' and Confirm.ask(
+            f"User exists in '{targetEnv}' tables (under [green]{duplicateEmail}[/green]). Okay to overwrite? If [cyan]no[/cyan], a new user will be created.",
+            ):
+        targetUserId = srcUserId
+    else:
+        # If src==target or target=='prod' or overwrite is not authorized, set
+        # user_id to None and spoof userExists to False to designate that the
+        # source will not be deleted
         targetUserId = None
         userExists = False
-    else:
-        if not Confirm.ask(
-                f"User exists in '{targetEnv}' tables (under [green]{duplicateEmail}[/green]). Okay to overwrite?"
-                ):
-            raise KeyboardInterrupt("Cancelled by user")
-            
-        targetUserId = srcUserId
-        
-        
+
 # Get the encrypted password of the target (in case this is the duplicate user)
 queryStr = sql.SQL(
     "select {fd} from {tbl} where {idfd}=%s"
