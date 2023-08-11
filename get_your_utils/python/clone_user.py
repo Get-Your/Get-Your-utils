@@ -24,6 +24,7 @@ from tomlkit import exceptions as tomlexceptions
 from pathlib import Path
 import json
 from rich.prompt import Prompt, Confirm
+from rich import print
 
 import coftc_cred_man as crd
 
@@ -48,17 +49,24 @@ def get_secret(var_name, read_dict=secrets_dict):
         error_msg = f"Set the '{var_name}' secrets variable"
         raise tomlexceptions.NonExistentKey(error_msg)
 
-# # Gather source and target databases (target is always dev)
-# dbSourceEnv = input("Enter the database environment (prod or dev): ")
+## Gather source and target databases
+# Specify the generic database profile. This will have '_prod' or '_dev'
+# appended to it based on the source and target environment selections
+genericProfile = 'getfoco'
 
-dbSourceEnv = 'prod'
-if dbSourceEnv.lower() == 'prod':
-    srcProfile = 'getfoco_prod'
-elif dbSourceEnv.lower() == 'dev':
-    srcProfile = 'getfoco_dev'
-else:
-    raise TypeError('Database environment not recognized')
-targetProfile = 'getfoco_dev'
+srcEnv = Prompt.ask(
+    "Enter the source environment",
+    choices=['prod', 'dev'],
+    default='prod',
+    )
+srcProfile = f"{genericProfile}_{srcEnv}"
+
+targetEnv = Prompt.ask(
+    "Enter the target environment",
+    choices=['prod', 'dev'],
+    default='dev',
+    )
+targetProfile = f"{genericProfile}_{targetEnv}"
     
 oldEmail = Prompt.ask("Enter the email address of the user to clone")
     
@@ -66,9 +74,7 @@ newEmail = Prompt.ask("Enter an email address for the cloned user (note that thi
 
 passwordClone = get_secret('PASSWORD_CLONE_ACCOUNT')
 print(
-    "\nThe password will be the same as user '{}'\n".format(
-        passwordClone,
-        )
+    f"\nCloning user from '{srcEnv}' to '{targetEnv}'...\nThe password will be the same as user '{passwordClone}'\n"
     )
 
 
@@ -108,21 +114,22 @@ queryStr = sql.SQL(
         idfd=sql.Identifier('email'),
         )
 srcCursor.execute(queryStr, (oldEmail.lower(),))
-userId = [x[0] for x in srcCursor.fetchall()]
-if len(userId)>1:
+userOut = [x[0] for x in srcCursor.fetchall()]
+if len(userOut)>1:
     raise AttributeError("More than one id exists for this user")
-userId = userId[0]
+srcUserId = userOut[0]
 
-# Check if user exists in target (dev) database
+# Check if user exists in target database
 queryStr = sql.SQL(
     "select count(*) from {tbl} where {idfd}=%s"
     ).format(
         tbl=sql.Identifier('public', 'app_user'),
         idfd=sql.Identifier('id'),
         )
-targetCursor.execute(queryStr, (userId,))
+targetCursor.execute(queryStr, (srcUserId,))
 userExists = True if targetCursor.fetchone()[0]>0 else False
 
+# If the user exists in target, gather the email address to display
 if userExists:
     queryStr = sql.SQL(
         "select {fd} from {tbl} where {idfd}=%s"
@@ -131,17 +138,23 @@ if userExists:
             tbl=sql.Identifier('public', 'app_user'),
             idfd=sql.Identifier('id'),
             )
-    targetCursor.execute(queryStr, (userId,))
+    targetCursor.execute(queryStr, (srcUserId,))
     duplicateEmail = targetCursor.fetchone()[0]
     
-    userConfirm = Confirm.ask(
-        f"User exists in dev tables (under [green]{duplicateEmail}[/green]). Okay to overwrite?"
-        )
-    
-    if not userConfirm:
-        raise KeyboardInterrupt("Cancelled by user")
-        
-        
+    # The user cannot be deleted if the source and target are the same or if
+    # the target is PROD; in these cases, a new ID will be created, else prompt
+    # for overwrite
+    if srcEnv != targetEnv and targetEnv != 'prod' and Confirm.ask(
+            f"User exists in '{targetEnv}' tables (under [green]{duplicateEmail}[/green]). Okay to overwrite? If [cyan]no[/cyan], a new user will be created.",
+            ):
+        targetUserId = srcUserId
+    else:
+        # If src==target or target=='prod' or overwrite is not authorized, set
+        # user_id to None and spoof userExists to False to designate that the
+        # source will not be deleted
+        targetUserId = None
+        userExists = False
+
 # Get the encrypted password of the target (in case this is the duplicate user)
 queryStr = sql.SQL(
     "select {fd} from {tbl} where {idfd}=%s"
@@ -187,7 +200,7 @@ if userExists:
                 tbl=sql.Identifier('public', table),
                 idfd=sql.Identifier(idField),
                 )
-        targetCursor.execute(queryStr, (userId,))
+        targetCursor.execute(queryStr, (targetUserId,))
         
     # Commit all deletions
     targetConn.commit()
@@ -219,7 +232,7 @@ for table in tableList:
             tbl=sql.Identifier('public', table),
             idfd=sql.Identifier(idField),
             )
-    srcCursor.execute(queryStr, (userId,))
+    srcCursor.execute(queryStr, (srcUserId,))
     try:
         # Convert inner tuples to lists for mutability
         dbOut = [list(x) for x in srcCursor.fetchall()]
@@ -251,82 +264,91 @@ for table in tableList:
         # Change phone number to unused (to prevent notifications)
         dbOut[0][fieldList.index('phone_number')] = '+13035551234'
         
-    # Ensure the matching address(es) exist and use the target IDs
-    elif table == 'app_address':
+    # For all other tables
+    else:
+        # If target user_id is different than source, update the dataset with
+        # the target
+        if targetUserId != srcUserId:
+            dbOut[0][fieldList.index('user_id')] = targetUserId
         
-        # Should only be one record (that will be modified below)
-        if len(dbOut) > 1:
-            raise TypeError("There should only be one app_address record")
-        
-        for addtype in ['eligibility_address_id', 'mailing_address_id']:
-            # Gather address
-            queryStr = sql.SQL(
-                "select {fd} from {tbl} where {idfd}=%s"
-                ).format(
-                    fd=sql.SQL(', ').join(map(sql.Identifier, ['address_sha1'])),
-                    tbl=sql.Identifier('public', 'app_addressrd'),
-                    idfd=sql.Identifier('id'),
-                    )
-            srcCursor.execute(queryStr, (dbOut[0][fieldList.index(addtype)],))
-            sha1Val = srcCursor.fetchone()[0]
+        # Ensure the matching address(es) exist and use the target IDs
+        if table == 'app_address':
             
-            # Take the address ID from the target if exists; else create and
-            # use that ID
-            queryStr = sql.SQL(
-                "select {fd} from {tbl} where {idfd}=%s"
-                ).format(
-                    fd=sql.SQL(', ').join(map(sql.Identifier, ['id'])),
-                    tbl=sql.Identifier('public', 'app_addressrd'),
-                    idfd=sql.Identifier('address_sha1'),
-                    )
-            targetCursor.execute(queryStr, (sha1Val,))
-            try:
-                targetAddrId = targetCursor.fetchone()[0]
-            except TypeError:   # address DNE; add it
-                # Get AddressRD info
+            # Should only be one record (that will be modified below)
+            if len(dbOut) > 1:
+                raise TypeError("There should only be one app_address record")
+            
+            for addtype in ['eligibility_address_id', 'mailing_address_id']:
+                # Gather address
                 queryStr = sql.SQL(
-                    "select {fd} from {tbl} where {tbfd}=%s and {idfd}!='id'"
+                    "select {fd} from {tbl} where {idfd}=%s"
                     ).format(
-                        fd=sql.SQL(', ').join(map(sql.Identifier, ['column_name'])),
-                        tbl=sql.Identifier('information_schema', 'columns'),
-                        tbfd=sql.Identifier('table_name'),
-                        idfd=sql.Identifier('column_name'),
+                        fd=sql.SQL(', ').join(map(sql.Identifier, ['address_sha1'])),
+                        tbl=sql.Identifier('public', 'app_addressrd'),
+                        idfd=sql.Identifier('id'),
                         )
-                srcCursor.execute(queryStr, ("app_addressrd",))
-                addrFieldList = [x[0] for x in srcCursor.fetchall()]
+                srcCursor.execute(queryStr, (dbOut[0][fieldList.index(addtype)],))
+                sha1Val = srcCursor.fetchone()[0]
                 
-                # Gather source data
-                srcCursor.execute(
-                    sql.SQL(
-                        """select {fd} from {tbl} where "id"=%s"""
+                # Take the address ID from the target if exists; else create and
+                # use that ID
+                queryStr = sql.SQL(
+                    "select {fd} from {tbl} where {idfd}=%s"
+                    ).format(
+                        fd=sql.SQL(', ').join(map(sql.Identifier, ['id'])),
+                        tbl=sql.Identifier('public', 'app_addressrd'),
+                        idfd=sql.Identifier('address_sha1'),
+                        )
+                targetCursor.execute(queryStr, (sha1Val,))
+                try:
+                    targetAddrId = targetCursor.fetchone()[0]
+                except TypeError:   # address DNE; add it
+                    # Get AddressRD info
+                    queryStr = sql.SQL(
+                        "select {fd} from {tbl} where {tbfd}=%s and {idfd}!='id'"
+                        ).format(
+                            fd=sql.SQL(', ').join(map(sql.Identifier, ['column_name'])),
+                            tbl=sql.Identifier('information_schema', 'columns'),
+                            tbfd=sql.Identifier('table_name'),
+                            idfd=sql.Identifier('column_name'),
+                            )
+                    srcCursor.execute(queryStr, ("app_addressrd",))
+                    addrFieldList = [x[0] for x in srcCursor.fetchall()]
+                    
+                    # Gather source data
+                    srcCursor.execute(
+                        sql.SQL(
+                            """select {fd} from {tbl} where "id"=%s"""
+                            ).format(
+                                fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
+                                tbl=sql.Identifier('public', 'app_addressrd'),
+                                ),
+                                (dbOut[0][fieldList.index(addtype)],),
+                            )
+                    srcAddrOut = list(srcCursor.fetchone())
+                    
+                    # Insert address into target DB and return the proper ID
+                    queryStr = sql.SQL(
+                        "insert into {tbl} ({fd}) VALUES ({vl}) returning ID"
                         ).format(
                             fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
                             tbl=sql.Identifier('public', 'app_addressrd'),
-                            ),
-                            (dbOut[0][fieldList.index(addtype)],),
-                        )
-                srcAddrOut = list(srcCursor.fetchone())
-                
-                # Insert address into target DB and return the proper ID
-                queryStr = sql.SQL(
-                    "insert into {tbl} ({fd}) VALUES ({vl}) returning ID"
-                    ).format(
-                        fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
-                        tbl=sql.Identifier('public', 'app_addressrd'),
-                        vl=sql.SQL(', ').join(sql.Placeholder()*len(addrFieldList)),
-                        )
-                targetCursor.execute(queryStr, srcAddrOut)
-                targetAddrId = targetCursor.fetchone()[0]
-                
-                # Commit this insert so the foreign keys will behave
-                targetConn.commit()
-                
-            # Use the target ID instead of the source (regardless of the insert)
-            dbOut[0][fieldList.index(addtype)] = targetAddrId
+                            vl=sql.SQL(', ').join(sql.Placeholder()*len(addrFieldList)),
+                            )
+                    targetCursor.execute(queryStr, srcAddrOut)
+                    targetAddrId = targetCursor.fetchone()[0]
+                    
+                    # Commit this insert so the foreign keys will behave
+                    targetConn.commit()
+                    
+                # Use the target ID instead of the source (regardless of the insert)
+                dbOut[0][fieldList.index(addtype)] = targetAddrId
     
-    # Insert into the target table
-    if idField == 'id':
-        # ID is the primary key and is ignored above, so must be added here
+    ## Insert into the target table
+    
+    # ID is the primary key and is ignored above, so must be added here UNLESS
+    # a new user is being added (targetUserId is None)
+    if idField == 'id' and targetUserId is not None:
         queryStr = sql.SQL(
             "insert into {tbl} ({fd}) VALUES {vl}"
             ).format(
@@ -338,26 +360,33 @@ for table in tableList:
         targetCursor.execute(
             queryStr,
             # JSONify any dicts and convert back to list of tuples
-            [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]+[userId]) for elem in dbOut],
+            [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]+[targetUserId]) for elem in dbOut],
             )
         
     else:
         queryStr = sql.SQL(
-            "insert into {tbl} ({fd}) VALUES {vl}"
+            """insert into {tbl} ({fd}) VALUES {vl}{rt}"""
             ).format(
                 fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
                 tbl=sql.Identifier('public', table),
                 vl=sql.SQL(', ').join(sql.Placeholder()*len(dbOut)),
+                # If this is a new user, get the new ID field
+                rt=sql.SQL(' RETURNING "id"') if idField=='id' else sql.SQL(''),
                 )
         targetCursor.execute(
             queryStr,
             # JSONify any dicts and convert back to list of tuples
             [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]) for elem in dbOut],
             )
+        
+        # If this is a new user, get the new ID field
+        if idField == 'id':
+            targetUserId = targetCursor.fetchone()[0]
             
 targetConn.commit()
     
 print('User cloned!')
+print('ID: {}'.format(targetUserId))
 print('email: {}'.format(newEmail))
 print('password: same as {}'.format(passwordClone))
 
