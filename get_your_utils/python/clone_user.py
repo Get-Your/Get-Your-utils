@@ -269,7 +269,8 @@ for table in tableList:
         # If target user_id is different than source, update the dataset with
         # the target
         if targetUserId != srcUserId:
-            dbOut[0][fieldList.index('user_id')] = targetUserId
+            for iteridx in range(len(dbOut)):
+                dbOut[iteridx][fieldList.index('user_id')] = targetUserId
         
         # Ensure the matching address(es) exist and use the target IDs
         if table == 'app_address':
