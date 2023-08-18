@@ -17,7 +17,6 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-from psycopg2 import connect as psqlconnect
 from psycopg2 import sql
 from tomlkit import loads
 from tomlkit import exceptions as tomlexceptions
@@ -26,7 +25,7 @@ import json
 from rich.prompt import Prompt, Confirm
 from rich import print
 
-import coftc_cred_man as crd
+from run_extracts import GetFoco
 
 ## Initialize vars
 try:
@@ -90,32 +89,11 @@ def clone_user(
         f"\nCloning user from '{srcEnv}' to '{targetEnv}'...\n"
         )
     
-    
-    # Connect to the dbs
-    srcCred = crd.Cred(srcProfile)
-    
-    # Construct connection string and connect
-    srcConn = psqlconnect(
-        "host={hst} user={usr} dbname={dbn} password={psw} sslmode={ssm}".format(
-            hst=srcCred.config['host'],
-            usr=srcCred.config['user'],
-            dbn=srcCred.config['db'],
-            psw=srcCred.password(),
-            ssm='require')
-        )  
+    ## Connect to the databases
+    srcConn = GetFoco('', db_profile=source_profile).conn
     srcCursor = srcConn.cursor()
     
-    targetCred = crd.Cred(targetProfile)
-    
-    # Construct connection string and connect
-    targetConn = psqlconnect(
-        "host={hst} user={usr} dbname={dbn} password={psw} sslmode={ssm}".format(
-            hst=targetCred.config['host'],
-            usr=targetCred.config['user'],
-            dbn=targetCred.config['db'],
-            psw=targetCred.password(),
-            ssm='require')
-        ) 
+    targetConn = GetFoco('', db_profile=target_profile).conn
     targetCursor = targetConn.cursor()
     
     ## Gather user id from source table
