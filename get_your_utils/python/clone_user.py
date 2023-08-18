@@ -152,7 +152,18 @@ def clone_user(
     
     ## Get the encrypted password of the target
     
-    # Get the encrypted password of the target (in case this is the duplicate user)
+    # Find a 'dev' connection; else create one from getfoco_dev just for this
+    if target_profile.endswith('dev'):
+        devCursor = targetCursor
+        passwordConnStr = targetConn.get_dsn_parameters()['dbname']
+    elif source_profile.endswith('dev'):
+        devCursor = srcCursor
+        passwordConnStr = srcConn.get_dsn_parameters()['dbname']
+    else:
+        passwordConnStr = 'getfoco_dev'
+        devConn = GetFoco('', db_profile=passwordConnStr).conn
+        devCursor = devConn.cursor()
+        
     queryStr = sql.SQL(
         "select {fd} from {tbl} where {idfd}=%s"
         ).format(
@@ -160,8 +171,14 @@ def clone_user(
             tbl=sql.Identifier('public', 'app_user'),
             idfd=sql.Identifier('email'),
             )
-    targetCursor.execute(queryStr, (passwordClone,))
-    targetPassword = targetCursor.fetchone()[0]
+    devCursor.execute(queryStr, (passwordClone,))
+    targetPassword = devCursor.fetchone()[0]
+    
+    # Close the dev connection, if exists
+    try:
+        devConn.close()
+    except:
+        pass
     
     # Go through tables. Note that these are in the order in which they are written
     # in the app (also ensure 'app_user' is first, for foreign key constraints)
@@ -389,9 +406,14 @@ def clone_user(
         
     print('User cloned!')
     print('ID: {}'.format(targetUserId))
-    print('email: {}'.format(target_email))
-    print('password: same as {}'.format(passwordClone))
-    
+    print("email: '{}'".format(target_email))
+    print(
+        "password: same as '{}' in '{}'".format(
+            passwordClone,
+            passwordConnStr,
+            )
+        )
+
 
 if __name__ == '__main__':
 
