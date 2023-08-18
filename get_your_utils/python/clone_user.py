@@ -52,15 +52,42 @@ def get_secret(var_name, read_dict=secrets_dict):
         
         
 def clone_user(
-        srcProfile,
-        targetProfile,
-        oldEmail,
-        newEmail,
-        ):
+        source_profile: str,
+        target_profile: str,
+        source_email: str,
+        target_email: str,
+        ) -> None:
+    """
+    Clone the specified user from the source to the target profile.
+
+    Parameters
+    ----------
+    source_profile : str
+        The profile name of the source. This uses coftc-cred-man to pull
+        database parameters.
+    target_profile : str
+        The profile name of the target. This uses coftc-cred-man to pull
+        database parameters.
+    source_email : str
+        The email address of the user to clone.
+    target_email : str
+        The selected email address of the cloned user. This must be unique in
+        the target database.
+
+    Raises
+    ------
+    TypeError
+        Raised when more than one ID exists for a user (shouldn't be possible).
+
+    Returns
+    -------
+    None
+
+    """
 
     passwordClone = get_secret('PASSWORD_CLONE_ACCOUNT')
     print(
-        f"\nCloning user from '{srcEnv}' to '{targetEnv}'...\nThe password will be the same as user '{passwordClone}'\n"
+        f"\nCloning user from '{srcEnv}' to '{targetEnv}'...\n"
         )
     
     
@@ -91,7 +118,7 @@ def clone_user(
         ) 
     targetCursor = targetConn.cursor()
     
-    # Gather user id from source table
+    ## Gather user id from source table
     queryStr = sql.SQL(
         "select {fd} from {tbl} where lower({idfd})=%s"
         ).format(
@@ -99,10 +126,10 @@ def clone_user(
             tbl=sql.Identifier('public', 'app_user'),
             idfd=sql.Identifier('email'),
             )
-    srcCursor.execute(queryStr, (oldEmail.lower(),))
+    srcCursor.execute(queryStr, (source_email.lower(),))
     userOut = [x[0] for x in srcCursor.fetchall()]
     if len(userOut)>1:
-        raise AttributeError("More than one id exists for this user")
+        raise TypeError("More than one id exists for this user")
     srcUserId = userOut[0]
     
     # Check if user exists in target database
@@ -242,7 +269,7 @@ def clone_user(
                 raise TypeError("There should only be one app_user record")
             
             # Set email to new version
-            dbOut[0][fieldList.index('email')] = newEmail
+            dbOut[0][fieldList.index('email')] = target_email
             
             # Set to password value to the target password gathered above
             dbOut[0][fieldList.index('password')] = targetPassword
@@ -374,7 +401,7 @@ def clone_user(
         
     print('User cloned!')
     print('ID: {}'.format(targetUserId))
-    print('email: {}'.format(newEmail))
+    print('email: {}'.format(target_email))
     print('password: same as {}'.format(passwordClone))
     
 
@@ -399,13 +426,14 @@ if __name__ == '__main__':
         )
     targetProfile = f"{genericProfile}_{targetEnv}"
         
-    oldEmail = Prompt.ask("Enter the email address of the user to clone")
+    srcEmail = Prompt.ask("Enter the email address of the user to clone")
         
-    newEmail = Prompt.ask("Enter an email address for the cloned user (note that this email may be sent communications from the app)")
+    targetEmail = Prompt.ask("Enter an email address for the cloned user (note that this email may be sent communications from the app)")
     
     clone_user(
         srcProfile,
         targetProfile,
-        oldEmail,
-        newEmail,
+        srcEmail,
+        targetEmail,
         )
+
