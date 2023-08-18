@@ -182,7 +182,8 @@ def clone_user(
         ]
     
     # Remove the user from target (if exists) so as to get a fresh start
-    if userExists:
+    # This is redundant, as a safety that users are *not* removed from PROD
+    if userExists and not target_profile.endswith('prod'):
         # Loop through tableList backward and delete
         for table in reversed(tableList):
             
@@ -260,6 +261,9 @@ def clone_user(
             
             # Change phone number to unused (to prevent notifications)
             dbOut[0][fieldList.index('phone_number')] = '+13035551234'
+            
+            # Update is_archived to True for cases where target is PROD
+            dbOut[0][fieldList.index('is_archived')] = True
             
         # For all other tables
         else:
