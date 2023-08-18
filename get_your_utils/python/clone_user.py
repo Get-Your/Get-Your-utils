@@ -145,6 +145,12 @@ def clone_user(
             # source will not be deleted
             targetUserId = None
             userExists = False
+            
+    else:
+        # If the user id doesn't exist, use the source, Luke
+        targetUserId = srcUserId
+    
+    ## Get the encrypted password of the target
     
     # Get the encrypted password of the target (in case this is the duplicate user)
     queryStr = sql.SQL(
