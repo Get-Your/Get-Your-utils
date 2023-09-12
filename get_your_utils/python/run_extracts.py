@@ -242,7 +242,8 @@ class Extract:
                     self.export_programs()
                 elif export_type == 'INCOMPLETE':
                     # Run list of incomplete applications
-                    self.export_incomplete()
+                    # self.export_incomplete()
+                    warnings.warn("WARNING: export_incomplete() should be run here, but isn't complete yet")
                 elif export_type == 'ALL':
                     self.run_all()
             
@@ -711,8 +712,8 @@ class Extract:
             warningList = []
             for iditm in ids_to_warn:
                 try:
-                    _ = df['Primary ID'].values.index(iditm)
-                except AttributeError:
+                    _ = list(df['Primary ID'].values).index(iditm)
+                except ValueError:
                     pass
                 else:
                     warningList.append(iditm)
@@ -868,6 +869,7 @@ class Extract:
         # Parse kwargs; start with initialized defaults
         save_file = True if not 'save_file' in self.kwargs.keys() else self.kwargs['save_file']
         reset_updates = True if not 'reset_updates' in self.kwargs.keys() else self.kwargs['reset_updates']
+        ids_to_warn = [] if not 'ids_to_warn' in self.kwargs.keys() else self.kwargs['ids_to_warn']
         
         if self.getfoco.conn.closed == 1:
             self.getfoco._connect()
@@ -1128,6 +1130,26 @@ class Extract:
 
 
 
+
+                # Set a warning when specific IDs are included in the extract
+                warningList = []
+                for iditm in ids_to_warn:
+                    try:
+                        _ = list(df['Primary ID'].values).index(iditm)
+                    except ValueError:
+                        pass
+                    else:
+                        warningList.append(iditm)
+                       
+                if len(warningList) > 0:
+                    userContinue = Confirm.ask(
+                        "\nWARNING: ID{} ({}) from [green]ids_to_warn[/green] found in this extract. Continue?".format(
+                            's' if len(warningList)>1 else '',
+                            ', '.join([str(x) for x in warningList]),
+                            )
+                        )
+                    if not userContinue:
+                        raise KeyboardInterrupt("User cancelled file creation based on ID-specific warning")
 
                 if save_file:
                     # Write to file
