@@ -242,7 +242,8 @@ class Extract:
                     self.export_programs()
                 elif export_type == 'INCOMPLETE':
                     # Run list of incomplete applications
-                    self.export_incomplete()
+                    # self.export_incomplete()
+                    warnings.warn("WARNING: export_incomplete() should be run here, but isn't complete yet")
                 elif export_type == 'ALL':
                     self.run_all()
             
