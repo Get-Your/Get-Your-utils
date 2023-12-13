@@ -24,19 +24,16 @@ if ( $proc.ExitCode -eq 0 ) {
 
     $BuildStr = "$($env:DOCKER_ACCOUNT)/$($env:DOCKER_REPO):$($env:BUILD_TAG)"
 
-    ## Add the Git version file (to be removed after build)
+    ## Add the Git version as an env var
     # Run the Git command in the DEPLOY_DIR directory (-C flag)
-    git -C $env:DEPLOY_DIR describe --tags | Out-File -Encoding utf8 $(Join-Path $env:DEPLOY_DIR ".gitversion")
+    $CodeVersion = git -C $env:DEPLOY_DIR describe --tags
 
     ## Run the Docker build and push
     Write-Host "`nBuilding into $BuildStr..."
-    docker build -t $BuildStr $env:DEPLOY_DIR
+    docker build --build-arg CODE_VERSION=$CodeVersion -t $BuildStr $env:DEPLOY_DIR
 
     Write-Host "`nPushing to Docker hub..."
     docker push $BuildStr
-
-    ## Remove the Git version file (it's to be used within a Docker build only)
-    Remove-Item $(Join-Path $env:DEPLOY_DIR ".gitversion")
 
     Read-Host -Prompt "Script complete. Press any key to exit"
 
