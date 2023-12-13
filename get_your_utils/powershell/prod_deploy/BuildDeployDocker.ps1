@@ -25,10 +25,14 @@ if ( $proc.ExitCode -eq 0 ) {
     $VersionStr = Read-Host -Prompt "Enter the PRODUCTION version to deploy (in the format '2.0.1', sans quotes)"
 
     $BuildStr = "$($env:DOCKER_ACCOUNT)/$($env:DOCKER_REPO):$($env:BUILD_TAG_PREFIX)-$VersionStr"
+    
+    ## Add the Git version as an env var
+    # Run the Git command in the DEPLOY_DIR directory (-C flag)
+    $CodeVersion = git -C $env:DEPLOY_DIR describe --tags
 
     ## Run the Docker build and push
     Write-Host "`nBuilding into $BuildStr..."
-    docker build -t $BuildStr $env:DEPLOY_DIR
+    docker build --build-arg CODE_VERSION=$CodeVersion -t $BuildStr $env:DEPLOY_DIR
 
     Write-Host "`nPushing to Docker hub..."
     docker push $BuildStr
