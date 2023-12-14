@@ -35,7 +35,7 @@ if ( $proc.ExitCode -eq 0 ) {
     Write-Host "`nPushing to Docker hub..."
     docker push $BuildStr
 
-    Read-Host -Prompt "Script complete. Press any key to exit"
+    Read-Host -Prompt "Script complete (for $CodeVersion). Press any key to exit"
 
 }
 else {
