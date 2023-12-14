@@ -22,10 +22,8 @@ if ( $proc.ExitCode -eq 0 ) {
         Set-Content env:\$name $value
     }
 
-    $VersionStr = Read-Host -Prompt "Enter the PRODUCTION version to deploy (in the format '2.0.1', sans quotes)"
+    $BuildStr = "$($env:DOCKER_ACCOUNT)/$($env:DOCKER_REPO):$($env:BUILD_TAG)"
 
-    $BuildStr = "$($env:DOCKER_ACCOUNT)/$($env:DOCKER_REPO):$($env:BUILD_TAG_PREFIX)-$VersionStr"
-    
     ## Add the Git version as an env var
     # Run the Git command in the DEPLOY_DIR directory (-C flag)
     $CodeVersion = git -C $env:DEPLOY_DIR describe --tags
