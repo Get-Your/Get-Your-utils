@@ -22,10 +22,18 @@ if ( $proc.ExitCode -eq 0 ) {
         Set-Content env:\$name $value
     }
 
-    $VersionStr = Read-Host -Prompt "Enter the PRODUCTION version to deploy (in the format '2.0.1', sans quotes)"
+    ## Have the user select the deployment environment
+    $EnvChoice = [System.Management.Automation.Host.ChoiceDescription[]](@(
+        (New-Object System.Management.Automation.Host.ChoiceDescription("&Dev", "Development environment")),
+        (New-Object System.Management.Automation.Host.ChoiceDescription("&Prod", "Production environment"))
+    ))
+    $EnvSelect = $Host.Ui.PromptForChoice("Environment", "Choose the environment to deploy to", $EnvChoice, 0)
 
-    $BuildStr = "$($env:DOCKER_ACCOUNT)/$($env:DOCKER_REPO):$($env:BUILD_TAG_PREFIX)-$VersionStr"
-    
+    # Set the build tag based on the user's choice, with massaging
+    $BuildTag = $EnvChoice[$EnvSelect].Label.Replace('&','').ToLower()
+
+    $BuildStr = "$($env:DOCKER_ACCOUNT)/$($env:DOCKER_REPO):$($BuildTag)"
+
     ## Add the Git version as an env var
     # Run the Git command in the DEPLOY_DIR directory (-C flag)
     $CodeVersion = git -C $env:DEPLOY_DIR describe --tags
@@ -37,7 +45,7 @@ if ( $proc.ExitCode -eq 0 ) {
     Write-Host "`nPushing to Docker hub..."
     docker push $BuildStr
 
-    Read-Host -Prompt "Script complete. Press any key to exit"
+    Read-Host -Prompt "Script complete (for $CodeVersion). Press any key to exit"
 
 }
 else {
