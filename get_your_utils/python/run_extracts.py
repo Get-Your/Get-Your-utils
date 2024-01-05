@@ -745,7 +745,7 @@ class Extract:
                 
             ## Download the specified blobs into a local directory for user files
 
-            print(f"Beginning download of user files to {self.user_files_dir.stem} folder")
+            print(f"Beginning download of {len(df)} user files to {self.user_files_dir.stem} folder")
             
             # Connect to the container
             blob_service_client = BlobServiceClient(
