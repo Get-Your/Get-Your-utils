@@ -1008,10 +1008,10 @@ class Extract:
                 right join (select * from public.app_iqprogram ii
                     left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
                 """,
-                wherePlaceholder=self.getfoco.where_framework + """ and i."is_enrolled"=true and i."program_name"='{prg}' and ({upd}) and u."id" not in ({prc})""".format(
+                wherePlaceholder=self.getfoco.where_framework + """ and i."is_enrolled"=true and i."program_name"='{prg}' and ({upd}) {prc}""".format(
                     prg=programname,
                     upd='or '.join([f"""{x}."is_updated" """ for x in set([x[0] for x in fieldsToUse])]),
-                    prc=', '.join([str(x) for x in alreadyProcessedUsers]),
+                    prc=f"""and u."id" not in ({', '.join([str(x) for x in alreadyProcessedUsers])})""" if len(alreadyProcessedUsers)>0 else '',
                     ),
                 fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
                 )
