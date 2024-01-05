@@ -29,6 +29,9 @@ import decimal
 
 from run_extracts import GetFoco
 
+from psycopg2.extensions import connection as pg_connection
+from sqlite3 import Connection as sqlite_connection
+
 ## Initialize vars
 try:
     fileDir = Path(__file__).parent
@@ -44,7 +47,7 @@ with open(
     
     
 def get_secret(var_name, read_dict=secrets_dict):
-    '''Get the secret variable or return explicit exception.'''
+    """ Get the secret variable or return explicit exception. """
     try:
         return read_dict[var_name]
     except tomlexceptions.NonExistentKey:
@@ -52,6 +55,46 @@ def get_secret(var_name, read_dict=secrets_dict):
         raise tomlexceptions.NonExistentKey(error_msg)
         
         
+def conn_info(conn):
+    """ Determine if database connection is active and its type. """
+    
+    # Initialize output dict
+    infoDict = {}
+    
+    # No connection
+    if conn is None:
+        infoDict.update(
+            {
+                'is_active': False,
+                'type': '',
+            }
+        )
+
+    # Postgres connection
+    elif isinstance(conn, pg_connection):
+        infoDict.update({'type': 'pg'})
+        if not conn.closed:
+            infoDict.update({'is_active': True})
+        else:
+            infoDict.update({'is_active': False})
+        
+    # SQLite connection
+    elif isinstance(conn, sqlite_connection):
+        infoDict.update({'type': 'sqlite'})
+        try:
+            # Try to set a new cursor, then close it if successful
+            testCursor = conn.cursor()
+            testCursor.close()
+            infoDict.update({'is_active': True})
+        except:
+            infoDict.update({'is_active': False})
+        
+    else:
+        raise Exception
+        
+    return(infoDict)
+        
+
 def clone_user(
         source_profile: str,
         target_profile: str,
@@ -63,6 +106,9 @@ def clone_user(
             'getyour',
             'db.sqlite3',
             ),
+        interactive: bool = True,
+        source_conn = None,
+        target_conn = None,
     ) -> None:
     """
     Clone the specified user from the source to the target profile.
@@ -85,6 +131,21 @@ def clone_user(
         selected environments is 'local'). The default is the location of the
         default db.sqlite3 local Django database, assuming ``Get-Your-utils``
         repo shares the same parent directory with ``Get-Your`` repo.
+    interactive : bool, optional
+        Flag whether to run in 'interactive mode'. Disabling this mode will
+        disable user prompts (with prompt-specific defaults) and set the
+        connections to keepalive.
+        
+        NOTE THAT THE PROFILES WILL NOT BE VERIFIED IF THERE ARE ACTIVE
+        CONNECTIONS.
+        
+        The default is True.
+    source_conn : <database connection>, optional
+        Connection to use for the source database. The default is None, meaning
+        the connection will be established in this function.
+    target_conn : <database connection>, optional
+        Connection to use for the target database. The default is None, meaning
+        the connection will be established in this function.
 
     Raises
     ------
@@ -99,21 +160,33 @@ def clone_user(
     passwordClone = get_secret('PASSWORD_CLONE_ACCOUNT')
         
     ## Connect to the databases, using a different connection for 'local' env
-    if source_profile.endswith('_local'):
-        srcLocal = True
-        srcConn = sqlite3.connect(local_db_path)
-    else:
-        srcLocal = False
-        srcConn = GetFoco('', db_profile=source_profile).conn
-    srcCursor = srcConn.cursor()
     
-    if target_profile.endswith('_local'):
-        targetLocal = True
-        targetConn = sqlite3.connect(local_db_path)
-    else:
-        targetLocal = False
-        targetConn = GetFoco('', db_profile=target_profile).conn
+    # If not interactive mode, use already-open connections if they exist.
+    # NOTE THAT THE PROFILES WILL NOT BE VERIFIED IF THERE ARE ACTIVE CONNECTIONS
+    
+    srcConn = source_conn
+    # If connection is not active, (re)define
+    if not conn_info(srcConn)['is_active']:
+        if source_profile.endswith('_local'):
+            srcConn = sqlite3.connect(local_db_path)
+        else:
+            srcConn = GetFoco('', db_profile=source_profile).conn
+    # Set the cursor regardless of prior connection
+    srcCursor = srcConn.cursor()
+    # Define if local based on the connection type
+    srcLocal = True if conn_info(srcConn)['type']=='sqlite' else False
+
+    targetConn = target_conn
+    # If connection is not active, (re)define
+    if not conn_info(targetConn)['is_active']:
+        if target_profile.endswith('_local'):
+            targetConn = sqlite3.connect(local_db_path)
+        else:
+            targetConn = GetFoco('', db_profile=target_profile).conn
+    # Set the cursor regardless of prior connection
     targetCursor = targetConn.cursor()
+    # Define if local based on the connection type
+    targetLocal = True if conn_info(targetConn)['type']=='sqlite' else False
     
     try:
         ## Gather user id from source table
@@ -163,9 +236,14 @@ def clone_user(
             
             # The user cannot be deleted if the source and target are the same or if
             # the target is PROD; in these cases, a new ID will be created, else prompt
-            # for overwrite
-            if srcEnv != targetEnv and targetEnv != 'prod' and Confirm.ask(
-                    f"User exists in '{targetEnv}' tables (under [green]{duplicateEmail}[/green]). Okay to overwrite? If [cyan]no[/cyan], a new user will be created.",
+            # for overwrite if in interactive mode. Overwrite is the default
+            # if interactive==False
+            if srcEnv != targetEnv and targetEnv != 'prod' and (
+                    not interactive or (
+                        interactive and Confirm.ask(
+                            f"User exists in '{targetEnv}' tables (under [green]{duplicateEmail}[/green]). Okay to overwrite? If [cyan]no[/cyan], a new user will be created.",
+                        )
+                    )
                 ):
                 targetUserId = srcUserId
             else:
@@ -515,6 +593,7 @@ def clone_user(
                     targetUserId = targetCursor.fetchone()[0]
         
     except:
+        # Rollback connections (this will passthrough if no open transactions)
         srcConn.rollback()
         targetConn.rollback()
         raise
@@ -534,14 +613,20 @@ def clone_user(
         )
         
     finally:
-        try:
-            srcConn.close()
-        except:
-            pass
-        try:
-            targetConn.close()
-        except:
-            pass
+        # Close cursors (this will passthrough if already closed)
+        srcCursor.close()
+        targetCursor.close()
+        
+        # Only attempt to close if in interactive mode
+        if interactive:
+            try:
+                srcConn.close()
+            except:
+                pass
+            try:
+                targetConn.close()
+            except:
+                pass
 
 
 if __name__ == '__main__':
