@@ -24,6 +24,8 @@ from pathlib import Path
 import json
 from rich.prompt import Prompt, Confirm
 from rich import print
+import sqlite3
+import decimal
 
 from run_extracts import GetFoco
 
@@ -55,6 +57,12 @@ def clone_user(
         target_profile: str,
         source_email: str,
         target_email: str,
+        local_db_path: str = fileDir.parents[2].joinpath(
+            'Get-Your',
+            'getyour',
+            'getyour',
+            'db.sqlite3',
+            ),
     ) -> None:
     """
     Clone the specified user from the source to the target profile.
@@ -72,6 +80,11 @@ def clone_user(
     target_email : str
         The selected email address of the cloned user. This must be unique in
         the target database.
+    local_db_path : str, optional
+        Path to the local (SQLite) database (only used if one or more of the
+        selected environments is 'local'). The default is the location of the
+        default db.sqlite3 local Django database, assuming ``Get-Your-utils``
+        repo shares the same parent directory with ``Get-Your`` repo.
 
     Raises
     ------
@@ -83,27 +96,36 @@ def clone_user(
     None
 
     """
-
     passwordClone = get_secret('PASSWORD_CLONE_ACCOUNT')
-    print(
-        f"\nCloning user from '{srcEnv}' to '{targetEnv}'...\n"
-    )
-    
-    ## Connect to the databases
-    srcConn = GetFoco('', db_profile=source_profile).conn
+        
+    ## Connect to the databases, using a different connection for 'local' env
+    if source_profile.endswith('_local'):
+        srcLocal = True
+        srcConn = sqlite3.connect(local_db_path)
+    else:
+        srcLocal = False
+        srcConn = GetFoco('', db_profile=source_profile).conn
     srcCursor = srcConn.cursor()
     
-    targetConn = GetFoco('', db_profile=target_profile).conn
+    if target_profile.endswith('_local'):
+        targetLocal = True
+        targetConn = sqlite3.connect(local_db_path)
+    else:
+        targetLocal = False
+        targetConn = GetFoco('', db_profile=target_profile).conn
     targetCursor = targetConn.cursor()
     
     ## Gather user id from source table
-    queryStr = sql.SQL(
-        "select {fd} from {tbl} where lower({idfd})=%s"
-    ).format(
-        fd=sql.SQL(', ').join(map(sql.Identifier, ['id'])),
-        tbl=sql.Identifier('public', 'app_user'),
-        idfd=sql.Identifier('email'),
-    )
+    if srcLocal:
+        queryStr = "select id from app_user where lower(email)=?"
+    else:
+        queryStr = sql.SQL(
+            "select {fd} from {tbl} where lower({idfd})=%s"
+        ).format(
+            fd=sql.SQL(', ').join(map(sql.Identifier, ['id'])),
+            tbl=sql.Identifier('public', 'app_user'),
+            idfd=sql.Identifier('email'),
+        )
     srcCursor.execute(queryStr, (source_email.lower(),))
     userOut = [x[0] for x in srcCursor.fetchall()]
     if len(userOut)>1:
@@ -111,24 +133,30 @@ def clone_user(
     srcUserId = userOut[0]
     
     # Check if user exists in target database
-    queryStr = sql.SQL(
-        "select count(*) from {tbl} where {idfd}=%s"
-    ).format(
-        tbl=sql.Identifier('public', 'app_user'),
-        idfd=sql.Identifier('id'),
-    )
+    if targetLocal:
+        queryStr = "select count(*) from app_user where id=?"
+    else:
+        queryStr = sql.SQL(
+            "select count(*) from {tbl} where {idfd}=%s"
+        ).format(
+            tbl=sql.Identifier('public', 'app_user'),
+            idfd=sql.Identifier('id'),
+        )
     targetCursor.execute(queryStr, (srcUserId,))
     userExists = True if targetCursor.fetchone()[0]>0 else False
     
     # If the user exists in target, gather the email address to display
     if userExists:
-        queryStr = sql.SQL(
-            "select {fd} from {tbl} where {idfd}=%s"
-        ).format(
-            fd=sql.SQL(', ').join(map(sql.Identifier, ['email'])),
-            tbl=sql.Identifier('public', 'app_user'),
-            idfd=sql.Identifier('id'),
-        )
+        if targetLocal:
+            queryStr = "select email from app_user where id=?"
+        else:
+            queryStr = sql.SQL(
+                "select {fd} from {tbl} where {idfd}=%s"
+            ).format(
+                fd=sql.SQL(', ').join(map(sql.Identifier, ['email'])),
+                tbl=sql.Identifier('public', 'app_user'),
+                idfd=sql.Identifier('id'),
+            )
         targetCursor.execute(queryStr, (srcUserId,))
         duplicateEmail = targetCursor.fetchone()[0]
         
@@ -149,6 +177,10 @@ def clone_user(
     else:
         # If the user id doesn't exist, use the source, Luke
         targetUserId = srcUserId
+        
+    print(
+        f"\nCloning user from '{srcEnv}' to '{targetEnv}'...\n"
+    )
     
     ## Get the encrypted password of the target
     
@@ -196,7 +228,7 @@ def clone_user(
         'app_householdmembershist',
         'app_eligibilityprogramhist',
         'app_iqprogramhist',
-        ]
+    ]
     
     # Remove the user from target (if exists) so as to get a fresh start
     # This is redundant, as a safety that users are *not* removed from PROD
@@ -209,12 +241,15 @@ def clone_user(
             else:
                 idField = 'user_id'
             
-            queryStr = sql.SQL(
-                "delete from {tbl} where {idfd}=%s"
-            ).format(
-                tbl=sql.Identifier('public', table),
-                idfd=sql.Identifier(idField),
-            )
+            if targetLocal:
+                queryStr = f"delete from {table} where {idField}=?"
+            else:
+                queryStr = sql.SQL(
+                    "delete from {tbl} where {idfd}=%s"
+                ).format(
+                    tbl=sql.Identifier('public', table),
+                    idfd=sql.Identifier(idField),
+                )
             targetCursor.execute(queryStr, (targetUserId,))
             
         # Commit all deletions
@@ -223,16 +258,21 @@ def clone_user(
     # Copy user from source to target databases
     for table in tableList:
         
-        queryStr = sql.SQL(
-            "select {fd} from {tbl} where {tbfd}=%s and {idfd}!='id'"
-        ).format(
-            fd=sql.SQL(', ').join(map(sql.Identifier, ['column_name'])),
-            tbl=sql.Identifier('information_schema', 'columns'),
-            tbfd=sql.Identifier('table_name'),
-            idfd=sql.Identifier('column_name'),
-        )
-        srcCursor.execute(queryStr, (table,))
-        fieldList = [x[0] for x in srcCursor.fetchall()]
+        if srcLocal:
+            queryStr = f"select * from {table}"
+            srcCursor.execute(queryStr)
+            fieldList = [x[0] for x in srcCursor.description if x[0]!='id']
+        else:
+            queryStr = sql.SQL(
+                "select {fd} from {tbl} where {tbfd}=%s and {idfd}!='id'"
+            ).format(
+                fd=sql.SQL(', ').join(map(sql.Identifier, ['column_name'])),
+                tbl=sql.Identifier('information_schema', 'columns'),
+                tbfd=sql.Identifier('table_name'),
+                idfd=sql.Identifier('column_name'),
+            )
+            srcCursor.execute(queryStr, (table,))
+            fieldList = [x[0] for x in srcCursor.fetchall()]
         
         if table == 'app_user':
             idField = 'id'
@@ -240,13 +280,20 @@ def clone_user(
             idField = 'user_id'
         
         # Gather source data
-        queryStr = sql.SQL(
-            "select {fd} from {tbl} where {idfd}=%s"
-        ).format(
-            fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
-            tbl=sql.Identifier('public', table),
-            idfd=sql.Identifier(idField),
-        )
+        if srcLocal:
+            queryStr = "select {fd} from {tbl} where {idfd}=?".format(
+                fd=', '.join(fieldList),
+                tbl=table,
+                idfd=idField,
+            )
+        else:
+            queryStr = sql.SQL(
+                "select {fd} from {tbl} where {idfd}=%s"
+            ).format(
+                fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
+                tbl=sql.Identifier('public', table),
+                idfd=sql.Identifier(idField),
+            )
         srcCursor.execute(queryStr, (srcUserId,))
         try:
             # Convert inner tuples to lists for mutability
@@ -279,7 +326,7 @@ def clone_user(
             # Change phone number to unused (to prevent notifications)
             dbOut[0][fieldList.index('phone_number')] = '+13035551234'
             
-            # Update is_archived to True for cases where target is PROD
+            # Update is_archived to True (to account for PROD targets)
             dbOut[0][fieldList.index('is_archived')] = True
             
         # For all other tables
@@ -299,63 +346,94 @@ def clone_user(
                 
                 for addtype in ['eligibility_address_id', 'mailing_address_id']:
                     # Gather address
-                    queryStr = sql.SQL(
-                        "select {fd} from {tbl} where {idfd}=%s"
-                    ).format(
-                        fd=sql.SQL(', ').join(map(sql.Identifier, ['address_sha1'])),
-                        tbl=sql.Identifier('public', 'app_addressrd'),
-                        idfd=sql.Identifier('id'),
-                    )
+                    if srcLocal:
+                        queryStr = "select address_sha1 from app_addressrd where id=?"
+                    else:
+                        queryStr = sql.SQL(
+                            "select {fd} from {tbl} where {idfd}=%s"
+                        ).format(
+                            fd=sql.SQL(', ').join(map(sql.Identifier, ['address_sha1'])),
+                            tbl=sql.Identifier('public', 'app_addressrd'),
+                            idfd=sql.Identifier('id'),
+                        )
                     srcCursor.execute(queryStr, (dbOut[0][fieldList.index(addtype)],))
                     sha1Val = srcCursor.fetchone()[0]
                     
                     # Take the address ID from the target if exists; else create and
                     # use that ID
-                    queryStr = sql.SQL(
-                        "select {fd} from {tbl} where {idfd}=%s"
-                    ).format(
-                        fd=sql.SQL(', ').join(map(sql.Identifier, ['id'])),
-                        tbl=sql.Identifier('public', 'app_addressrd'),
-                        idfd=sql.Identifier('address_sha1'),
-                    )
+                    if targetLocal:
+                        queryStr = "select id from app_addressrd where address_sha1=?"
+                    else:
+                        queryStr = sql.SQL(
+                            "select {fd} from {tbl} where {idfd}=%s"
+                        ).format(
+                            fd=sql.SQL(', ').join(map(sql.Identifier, ['id'])),
+                            tbl=sql.Identifier('public', 'app_addressrd'),
+                            idfd=sql.Identifier('address_sha1'),
+                        )
                     targetCursor.execute(queryStr, (sha1Val,))
                     try:
                         targetAddrId = targetCursor.fetchone()[0]
                     except TypeError:   # address DNE; add it
                         # Get AddressRD info
-                        queryStr = sql.SQL(
-                            "select {fd} from {tbl} where {tbfd}=%s and {idfd}!='id'"
-                        ).format(
-                            fd=sql.SQL(', ').join(map(sql.Identifier, ['column_name'])),
-                            tbl=sql.Identifier('information_schema', 'columns'),
-                            tbfd=sql.Identifier('table_name'),
-                            idfd=sql.Identifier('column_name'),
-                        )
-                        srcCursor.execute(queryStr, ("app_addressrd",))
-                        addrFieldList = [x[0] for x in srcCursor.fetchall()]
+                        if srcLocal:
+                            queryStr = "select * from app_addressrd"
+                            srcCursor.execute(queryStr)
+                            addrFieldList = [x[0] for x in srcCursor.description if x[0]!='id']
+                        else:
+                            queryStr = sql.SQL(
+                                "select {fd} from {tbl} where {tbfd}=%s and {idfd}!='id'"
+                            ).format(
+                                fd=sql.SQL(', ').join(map(sql.Identifier, ['column_name'])),
+                                tbl=sql.Identifier('information_schema', 'columns'),
+                                tbfd=sql.Identifier('table_name'),
+                                idfd=sql.Identifier('column_name'),
+                            )
+                            srcCursor.execute(queryStr, ("app_addressrd",))
+                            addrFieldList = [x[0] for x in srcCursor.fetchall()]
                         
                         # Gather source data
-                        srcCursor.execute(
-                            sql.SQL(
+                        if srcLocal:
+                            queryStr = "select {fd} from {tbl} where id=?".format(
+                                fd=', '.join(addrFieldList),
+                                tbl='app_addressrd',
+                            )
+                        else:
+                            queryStr = sql.SQL(
                                 """select {fd} from {tbl} where "id"=%s"""
                             ).format(
                                 fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
                                 tbl=sql.Identifier('public', 'app_addressrd'),
-                            ),
-                                (dbOut[0][fieldList.index(addtype)],),
                             )
+                        srcCursor.execute(
+                            queryStr,
+                            (dbOut[0][fieldList.index(addtype)], ),
+                        )
                         srcAddrOut = list(srcCursor.fetchone())
                         
                         # Insert address into target DB and return the proper ID
-                        queryStr = sql.SQL(
-                            "insert into {tbl} ({fd}) VALUES ({vl}) returning ID"
-                        ).format(
-                            fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
-                            tbl=sql.Identifier('public', 'app_addressrd'),
-                            vl=sql.SQL(', ').join(sql.Placeholder()*len(addrFieldList)),
-                        )
+                        if targetLocal:
+                            queryStr = "insert into {tbl} ({fd}) VALUES ({vl})".format(
+                                fd=', '.join(addrFieldList),
+                                tbl='app_addressrd',
+                                vl=', '.join(['?']*len(addrFieldList)),
+                            )
+                            # Convert Decimal type to integer or float for SQLite
+                            srcAddrOut = [int(x) if isinstance(x, decimal.Decimal) and len(str(x).split('.'))==1 else float(x) if isinstance(x, decimal.Decimal) else x for x in srcAddrOut]
+                        else:
+                            queryStr = sql.SQL(
+                                "insert into {tbl} ({fd}) VALUES ({vl}) returning ID"
+                            ).format(
+                                fd=sql.SQL(', ').join(map(sql.Identifier, addrFieldList)),
+                                tbl=sql.Identifier('public', 'app_addressrd'),
+                                vl=sql.SQL(', ').join(sql.Placeholder()*len(addrFieldList)),
+                            )
                         targetCursor.execute(queryStr, srcAddrOut)
-                        targetAddrId = targetCursor.fetchone()[0]
+                        
+                        if targetLocal:
+                            targetAddrId = targetCursor.lastrowid
+                        else:
+                            targetAddrId = targetCursor.fetchone()[0]
                         
                         # Commit this insert so the foreign keys will behave
                         targetConn.commit()
@@ -368,40 +446,72 @@ def clone_user(
         # ID is the primary key and is ignored above, so must be added here UNLESS
         # a new user is being added (targetUserId is None)
         if idField == 'id' and targetUserId is not None:
-            queryStr = sql.SQL(
-                "insert into {tbl} ({fd}) VALUES {vl}"
-            ).format(
-                fd=sql.SQL(', ').join(map(sql.Identifier, fieldList+[idField])),
-                tbl=sql.Identifier('public', table),
-                vl=sql.SQL(', ').join(sql.Placeholder()*len(dbOut)),
-            )
-            
-            targetCursor.execute(
-                queryStr,
-                # JSONify any dicts and convert back to list of tuples
-                [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]+[targetUserId]) for elem in dbOut],
-            )
+            if targetLocal:
+                queryStr = "insert into {tbl} ({fd}) VALUES ({vl})".format(
+                    fd=', '.join(fieldList+[idField]),
+                    tbl=table,
+                    vl=', '.join(['?']*(len(dbOut[0])+1)) # account for idField here
+                )
+                targetCursor.executemany(
+                    queryStr,
+                    # JSONify any dicts and convert back to list of tuples
+                    # Also convert decimal.Decimal to Python-native types that
+                    # SQLite can understand
+                    [tuple([json.dumps(x) if isinstance(x, dict) else int(x) if isinstance(x, decimal.Decimal) and len(str(x).split('.'))==1 else float(x) if isinstance(x, decimal.Decimal) else x for idx,x in enumerate(elem)]+[targetUserId]) for elem in dbOut],
+                )
+            else:
+                queryStr = sql.SQL(
+                    "insert into {tbl} ({fd}) VALUES {vl}"
+                ).format(
+                    fd=sql.SQL(', ').join(map(sql.Identifier, fieldList+[idField])),
+                    tbl=sql.Identifier('public', table),
+                    vl=sql.SQL(', ').join(sql.Placeholder()*len(dbOut)),
+                )
+                targetCursor.execute(
+                    queryStr,
+                    # JSONify any dicts and convert back to list of tuples
+                    [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]+[targetUserId]) for elem in dbOut],
+                )
             
         else:
-            queryStr = sql.SQL(
-                """insert into {tbl} ({fd}) VALUES {vl}{rt}"""
-            ).format(
-                fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
-                tbl=sql.Identifier('public', table),
-                vl=sql.SQL(', ').join(sql.Placeholder()*len(dbOut)),
+            if targetLocal:
+                queryStr = "insert into {tbl} ({fd}) VALUES ({vl})".format(
+                    fd=', '.join(fieldList),
+                    tbl=table,
+                    vl=', '.join(['?']*len(dbOut[0]))
+                )
+                targetCursor.executemany(
+                    queryStr,
+                    # JSONify any dicts and convert back to list of tuples
+                    # Also convert decimal.Decimal to Python-native types that
+                    # SQLite can understand
+                    [tuple([json.dumps(x) if isinstance(x, dict) else int(x) if isinstance(x, decimal.Decimal) and len(str(x).split('.'))==1 else float(x) if isinstance(x, decimal.Decimal) else x for idx,x in enumerate(elem)]) for elem in dbOut],
+                )
+                
                 # If this is a new user, get the new ID field
-                rt=sql.SQL(' RETURNING "id"') if idField=='id' else sql.SQL(''),
-            )
-            targetCursor.execute(
-                queryStr,
-                # JSONify any dicts and convert back to list of tuples
-                [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]) for elem in dbOut],
-            )
+                if idField == 'id':
+                    targetUserId = targetCursor.lastrowid
+                    
+            else:
+                queryStr = sql.SQL(
+                    """insert into {tbl} ({fd}) VALUES {vl}{rt}"""
+                ).format(
+                    fd=sql.SQL(', ').join(map(sql.Identifier, fieldList)),
+                    tbl=sql.Identifier('public', table),
+                    vl=sql.SQL(', ').join(sql.Placeholder()*len(dbOut)),
+                    # If this is a new user, get the new ID field
+                    rt=sql.SQL(' RETURNING "id"') if idField=='id' else sql.SQL(''),
+                )
+                targetCursor.execute(
+                    queryStr,
+                    # JSONify any dicts and convert back to list of tuples
+                    [tuple([json.dumps(x) if isinstance(x, dict) else x for idx,x in enumerate(elem)]) for elem in dbOut],
+                )
             
             # If this is a new user, get the new ID field
             if idField == 'id':
                 targetUserId = targetCursor.fetchone()[0]
-                
+
     targetConn.commit()
         
     print('User cloned!')
@@ -424,14 +534,14 @@ if __name__ == '__main__':
     
     srcEnv = Prompt.ask(
         "Enter the source environment",
-        choices=['prod', 'dev'],
+        choices=['prod', 'dev', 'local'],
         default='prod',
     )
     srcProfile = f"{genericProfile}_{srcEnv}"
     
     targetEnv = Prompt.ask(
         "Enter the target environment",
-        choices=['prod', 'dev'],
+        choices=['prod', 'dev', 'local'],
         default='dev',
     )
     targetProfile = f"{genericProfile}_{targetEnv}"
