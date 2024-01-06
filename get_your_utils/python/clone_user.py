@@ -67,6 +67,7 @@ def conn_info(conn):
             {
                 'is_active': False,
                 'type': '',
+                'environment': '',
             }
         )
 
@@ -74,13 +75,29 @@ def conn_info(conn):
     elif isinstance(conn, pg_connection):
         infoDict.update({'type': 'pg'})
         if not conn.closed:
-            infoDict.update({'is_active': True})
+            dbName = conn.get_dsn_parameters()['dbname'].lower()
+            infoDict.update(
+                {
+                    'is_active': True,
+                    'environment': 'dev' if 'dev' in dbName else 'prod' if 'prod' in dbName else 'unknown',
+                }
+            )
         else:
-            infoDict.update({'is_active': False})
+            infoDict.update(
+                {
+                    'is_active': False,
+                    'environment': 'unknown',
+                }
+            )
         
     # SQLite connection
     elif isinstance(conn, sqlite_connection):
-        infoDict.update({'type': 'sqlite'})
+        infoDict.update(
+            {
+                'type': 'sqlite',
+                'environment': 'local',
+            }
+        )
         try:
             # Try to set a new cursor, then close it if successful
             testCursor = conn.cursor()
@@ -95,7 +112,7 @@ def conn_info(conn):
     return(infoDict)
         
 
-def clone_user(
+def run_clone(
         source_profile: str,
         target_profile: str,
         source_email: str,
@@ -175,6 +192,7 @@ def clone_user(
     srcCursor = srcConn.cursor()
     # Define if local based on the connection type
     srcLocal = True if conn_info(srcConn)['type']=='sqlite' else False
+    srcEnv = conn_info(srcConn)['environment']
 
     targetConn = target_conn
     # If connection is not active, (re)define
@@ -187,6 +205,7 @@ def clone_user(
     targetCursor = targetConn.cursor()
     # Define if local based on the connection type
     targetLocal = True if conn_info(targetConn)['type']=='sqlite' else False
+    targetEnv = conn_info(targetConn)['environment']
     
     try:
         ## Gather user id from source table
@@ -654,7 +673,7 @@ if __name__ == '__main__':
         
     targetEmail = Prompt.ask("Enter an email address for the cloned user (note that this email may be sent communications from the app)")
     
-    clone_user(
+    run_clone(
         srcProfile,
         targetProfile,
         srcEmail,
