@@ -870,6 +870,10 @@ class Extract:
         save_file = True if not 'save_file' in self.kwargs.keys() else self.kwargs['save_file']
         reset_updates = True if not 'reset_updates' in self.kwargs.keys() else self.kwargs['reset_updates']
         ids_to_warn = [] if not 'ids_to_warn' in self.kwargs.keys() else self.kwargs['ids_to_warn']
+        mark_enrolled = True if not 'mark_enrolled' in self.kwargs.keys() else self.kwargs['mark_enrolled']
+        
+        if reset_updates != mark_enrolled:
+            raise TypeError("reset_updates and mark_enrolled must be set to the same value")
         
         if self.getfoco.conn.closed == 1:
             self.getfoco._connect()
@@ -1002,7 +1006,23 @@ class Extract:
                     **{'Enrolled in Program': [True if isinstance(x, str) and x.lower().startswith('update') else False for x in df['Notes']]},
                     )
                 
+                ## Data validation
                 
+                # User IDs in question
+                userIds = df['Primary ID'].tolist()
+                
+                # Ensure none of the users have more than one record per
+                # program. This would likely signify a renewal process that got
+                # stuck short of completing
+                renewalCheckQuery = "select user_id, program_id, count(*) from public.app_iqprogram where user_id in ({}) group by user_id, program_id".format(
+                    ','.join(['%s']*len(userIds)),
+                )
+                cursor.execute(
+                    renewalCheckQuery,
+                    userIds,
+                )
+                renewalCheckOut = cursor.fetchall()
+                assert all(x[2]==1 for x in renewalCheckOut)
                 
                 
                 # Check for prior enrollments for new users
@@ -1105,6 +1125,8 @@ class Extract:
                     if not userContinue:
                         raise KeyboardInterrupt("User cancelled file creation based on ID-specific warning")
 
+                # Determine output
+                outMsg = []
                 if save_file:
                     # Write to file
                     df.to_csv(
@@ -1122,7 +1144,41 @@ class Extract:
                     # is_updated being reset
                     allAffectedUsers.extend(df['Primary ID'].tolist())
             
-                    print("Extract saved!")  
+                    outMsg.append("extract saved")
+                    
+                if mark_enrolled:
+                    # Mark all users enrolled in the current program by
+                    # executing the setenrolled function
+                    try:
+                        functionQuery = "SELECT public.app_iqprogram_setenrolled(%s,{})".format(
+                            ','.join(['%s']*len(userIds)),
+                        )
+                        cursor.execute(
+                            functionQuery,
+                            [programname]+userIds,
+                        )
+                        functionMsg = cursor.fetchone()[0]
+                        
+                        # Raise exception if the number enrolled from the
+                        # function is different than the number of new
+                        # applicants found above
+                        numberEnrolled = re.match(
+                            r'Once transaction is committed: (\d*) users enrolled.*',
+                            functionMsg
+                        ).group(1)
+                        if int(numberEnrolled) != len(newOut):
+                            raise AssertionError('Number enrolled is different than new applicants')
+                    except:
+                        self.getfoco.conn.rollback()
+                        raise
+                    else:
+                        self.getfoco.conn.commit()
+                        outMsg.append("users enrolled")
+                    
+                # Print any output to the user
+                if len(outMsg) > 0:
+                    print("{}!".format(' and '.join(outMsg)).capitalize())
+                    
                 
         # Only reset is_updated values if save_file==True (to ensure the
         # extracts were exported)
