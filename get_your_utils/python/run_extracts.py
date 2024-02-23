@@ -998,13 +998,14 @@ class Extract:
                     [tuple([x] + list(y)) for x,y in zip(notesList, dbOut)],
                     )
 
-                # Add column for 'Enrolled in Program' and set based on notes
-                # field
-                # NOTE that this assumes a user is already enrolled only if
-                # notes starts with 'update' (case-insensitive)
-                df = df.assign(
-                    **{'Enrolled in Program': [True if isinstance(x, str) and x.lower().startswith('update') else False for x in df['Notes']]},
-                    )
+                # Add column for 'Enrolled in Program' (if `not mark_enrolled`)
+                # and set based on notes field
+                if not mark_enrolled:
+                    # NOTE that this assumes a user is already enrolled only if
+                    # notes starts with 'update' (case-insensitive)
+                    df = df.assign(
+                        **{'Enrolled in Program': [True if isinstance(x, str) and x.lower().startswith('update') else False for x in df['Notes']]},
+                        )
                 
                 ## Data validation
                 
@@ -1068,8 +1069,12 @@ class Extract:
                         # Some issue with reading the file; go to the next
                         continue
                     
-                    # Filter for only enrolled==true
-                    checkDf = checkDf[checkDf['Enrolled in Program'].apply(lambda x: x==True)]
+                    # Filter for only enrolled==true if this column exists;
+                    # else, assume all users in the extract are enrolled
+                    try:
+                        checkDf = checkDf[checkDf['Enrolled in Program'].apply(lambda x: x==True)]
+                    except KeyError:
+                        pass
                     
                     if len(checkDf) > 0:
                         checkData = list(
