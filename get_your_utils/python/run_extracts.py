@@ -907,53 +907,6 @@ class Extract:
             # Find the index of the 'id' field for later reference
             idFieldIdx = next(iter(inidx for inidx,x in enumerate(fieldsToUse) if x[1]=='id'))
             
-            ## Gather currently-enrolled applicants of the current program who
-            ## have renewed their profile
-            
-            # To check for renewals:
-                # 1) Verify the iqprogram.applied_at timestamp is after the
-                # user.last_renewed_at timestamp
-                # 2) Check the iqprogramhist table to see if they have
-                # previously enrolled
-                
-            if programname == 'grocery':
-                
-                # For additionalJoin:
-                    # - brings in the IQ programs' information        
-                # Note that mailing and eligibility address verifications are
-                # checked before income verification, so they don't need to be
-                # duplicated here
-                
-                # In the where clause:
-                    # - i.is_enrolled=false filters out already-enrolled users (the
-                    # user has applied when a record exists
-                renewalApplicantQuery = self.getfoco.select_framework.format(
-                    additionalJoin="""
-                    right join (select * from public.app_iqprogram ii
-                        left join public.app_iqprogramrd iir on iir.id=ii.program_id) i on i.user_id=u.id
-                    """,
-                    wherePlaceholder=self.getfoco.where_framework + """ and h."is_income_verified"=true and i."is_enrolled"=false and i."program_name"='{prg}' and u."last_renewed_at" is not null and i."applied_at">u."last_renewed_at" """.format(
-                        prg=programname,
-                        ),
-                    fields=','.join([f'{x[0]}."{x[1]}"' for x in fieldsToUse]),
-                    )
-                cursor.execute(renewalApplicantQuery)
-                renewalOut = cursor.fetchall()
-                # Add empty 'modifier' key to 'household_info' JSON values, if
-                # applicable (empty indicates 'not a modified value')
-                try:
-                    jsonIdx = next(iter(idx for idx,x in enumerate(fieldsToUse) if x[1]=='household_info'))
-                except StopIteration:
-                    pass
-                else:
-                    for idx,itm in enumerate(renewalOut):
-                        itm[jsonIdx].update({'modifier': ''})
-                        renewalOut[idx] = tuple(list(itm[:jsonIdx])+[itm[jsonIdx]]+list(itm[jsonIdx+1:]))
-
-                dbOut.extend(renewalOut)
-                notesList.extend(['{} RENEWAL'.format(pendulum.now().format('YYYY'))]*len(renewalOut))
-                alreadyProcessedUsers.extend([x[idFieldIdx] for x in renewalOut])
-            
             ## Gather new applicants for the current program
             
             # For additionalJoin:
@@ -1057,18 +1010,18 @@ class Extract:
                 # This has been an issue with GTR (and probably others, but
                 # since they're not payments they haven't been an issue) with
                 # the v1 app, so we need to verify it doesn't continue
-                # happening with v2
-                
-                # This is marked for review 6 months from v2 release
-                if pendulum.now() >= pendulum.parse('2023-06-15').add(months=6):
-                    warnings.warn("Consider removing the verification that new users haven't been previously enrolled in each program if there haven't been issues with the v2 app (see code comments for details)")
-                    
-                
-                
+                # happening
+
                 # Use case-insensitive programname when searching to catch all
                 # files with older naming conventions as well
                 fileList = [x for x in os.listdir(self.getfoco.output_file_dir) if fnmatch(x, f"*{programname}*")]
                 
+                # With renewal availability in Get-Your v4, 'already enrolled'
+                # here is essentially meaningless. Use only the current-year
+                # files as a doublecheck that a user hasn't been enrolled more
+                # than once
+                fileList = [x for x in fileList if int(re.match(r'(\d{4}).*', x).group(1))==pendulum.today().year]
+
                 # Initialize the list of those possibly already enrolled
                 possibleAlreadyEnrolled = []
                 
@@ -1143,9 +1096,10 @@ class Extract:
                        
                 if len(warningList) > 0:
                     userContinue = Confirm.ask(
-                        "\nWARNING: ID{} ({}) from [green]ids_to_warn[/green] found in this extract. Continue?".format(
+                        "\nWARNING: ID{} ({}) from [green]ids_to_warn[/green] found in the '{}' extract. Continue?".format(
                             's' if len(warningList)>1 else '',
                             ', '.join([str(x) for x in warningList]),
+                            programname,
                             )
                         )
                     if not userContinue:
