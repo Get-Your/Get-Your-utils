@@ -346,7 +346,13 @@ class Extract:
                             usr=itm[idFieldIdx],
                             )
                         )
-                    histOut = cursor.fetchone()[0]
+                    try:
+                        histOut = cursor.fetchone()[0]
+                    except TypeError:
+                        histOut = {"mailing_address_id": 0, "eligibility_address_id": 0}
+                    
+                    # print(histOut)
+                    # raise Exception('breakpoint')
                     
                     # Define updatedFields as (index of record_list, 
                     # historical value) (if the historical value is an 
@@ -1069,6 +1075,10 @@ class Extract:
                         # Some issue with reading the file; go to the next
                         continue
                     
+                    # Check when Notes is not 'UPDATE ONLY' (only when None or
+                    # 'renewal')
+                    checkDf = checkDf[checkDf['Notes'].apply(lambda x: x != 'UPDATE ONLY')]
+                    
                     # Filter for only enrolled==true if this column exists;
                     # else, assume all users in the extract are enrolled
                     try:
@@ -1155,30 +1165,53 @@ class Extract:
                     # Mark all users enrolled in the current program by
                     # executing the setenrolled function
                     try:
-                        functionQuery = "SELECT public.app_iqprogram_setenrolled(%s,{})".format(
-                            ','.join(['%s']*len(userIds)),
-                        )
-                        cursor.execute(
-                            functionQuery,
-                            [programname]+userIds,
-                        )
-                        functionMsg = cursor.fetchone()[0]
-                        
-                        # Raise exception if the number enrolled from the
-                        # function is different than the number of new
-                        # applicants found above
-                        numberEnrolled = re.match(
-                            r'Once transaction is committed: (\d*) users enrolled.*',
-                            functionMsg
-                        ).group(1)
+                        # Only 100 elements can be input to a function, so
+                        # limit this to 99 users at a time (plus programname
+                        # == 100)
+                        iterLimit = 99
+                        functionIdx = 0
+                        numberEnrolled = 0
+                        while 1:
+                            functionUsers = userIds[iterLimit*functionIdx:iterLimit*(functionIdx+1)]
+                            functionQuery = "SELECT public.app_iqprogram_setenrolled(%s,{})".format(
+                                ','.join(['%s']*len(functionUsers)),
+                            )
+                            
+                            cursor.execute(
+                                functionQuery,
+                                [programname]+functionUsers,
+                            )
+                            functionMsg = cursor.fetchone()[0]
+                            
+                            # Raise exception if the number enrolled from the
+                            # function is different than the number of new
+                            # applicants found above
+                            numberEnrolled += int(
+                                re.match(
+                                    r'Once transaction is committed: (\d*) users enrolled.*',
+                                    functionMsg
+                                ).group(1)
+                            )
+
+                            # Break the loop if all userIds have been input,
+                            # else iterate functionIdx
+                            if iterLimit*(functionIdx+1)>=len(userIds):
+                                break
+                            functionIdx += 1
+                            
+                        # Take the total enrolled and compare it to the extract
                         if int(numberEnrolled) != len(newOut):
                             raise AssertionError('Number enrolled is different than new applicants')
+                            
                     except:
                         self.getfoco.conn.rollback()
                         raise
                     else:
                         self.getfoco.conn.commit()
                         outMsg.append("users enrolled")
+                        
+                else:
+                    outMsg.append("users were not enrolled")
                     
                 # Print any output to the user
                 if len(outMsg) > 0:
