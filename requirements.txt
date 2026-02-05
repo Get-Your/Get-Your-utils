@@ -4,5 +4,7 @@ psycopg2~=2.9
 typer[all]~=0.9
 python-dotenv~=1.0
 azure-storage-blob~=12.11
+numpy==1.19.5
+pandas==1.2.4
 coftc-cred-man~=3.2
 coftc-file-utils~=2.1
