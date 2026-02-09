@@ -1,9 +1,9 @@
 [project]
 name = "get-your-utils"
-version = "4.1.0"
+version = "4.1.1"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = "~=3.9.0"
 dependencies = [
     "azure-storage-blob~=12.26.0",
     "coftc-cred-man",
@@ -18,6 +18,6 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-coftc-file-utils = { path = "../dist/coftc_file_utils-3.0.1-py3-none-any.whl" }
-coftc-logging-utils = { path = "../dist/coftc_logging_utils-2.0.2-py3-none-any.whl" }
-coftc-cred-man = { path = "../dist/coftc_cred_man-4.1.0-py3-none-any.whl" }
+coftc-file-utils = { path = "../dist/coftc_file_utils-3.0.2-py3-none-any.whl" }
+coftc-logging-utils = { path = "../dist/coftc_logging_utils-2.0.3-py3-none-any.whl" }
+coftc-cred-man = { path = "../dist/coftc_cred_man-4.1.2-py3-none-any.whl" }
