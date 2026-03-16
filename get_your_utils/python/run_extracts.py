@@ -747,101 +747,7 @@ class Extract:
                     index=False,
                     )
         
-                print("Extract saved!")
-                
-            ## Download the specified blobs into a local directory for user files
-
-            print(f"Beginning download of {len(df)} user files to {self.user_files_dir.stem} folder")
-            
-            # Connect to the container
-            blob_service_client = BlobServiceClient(
-                account_url=f"https://{self.AZURE_CUSTOM_DOMAIN.replace('https://', '')}",
-                credential=self.STORAGE_PROD_SAS,
-                )
-            container_client = blob_service_client.get_container_client(
-                container=self.AZURE_CONTAINER_NAME,
-                )
-            
-            # List all blobs
-            # This is also the first command to flag an expired SAS certificate
-            try:
-                blobList = list(container_client.list_blobs())
-            except ClientAuthenticationError:
-                print("\n\n[bold red]You may have an expired SAS certificate.\n\n")
-                raise
-            
-            ## Move everything in user_files_dir to 'complete' subdir
-            userItemsToMove = [x for x in os.listdir(self.user_files_dir) if x.lower()!='complete']
-            for itemnm in userItemsToMove:
-                itemPath = self.user_files_dir.joinpath(itemnm)
-                
-                if itemPath.is_dir():
-                    targetDir = self.user_files_dir.joinpath('complete', itemnm)
-                    # Create targetDir and parents, if applicable
-                    # This shouldn't be necessary, but there's a bug in
-                    # coftc_file_utils.move_file()
-                    targetDir.mkdir(parents=True, exist_ok=True)
-                    
-                    for filenm in os.listdir(itemPath):
-                        _ = coftc_file_utils.move_file(
-                            itemPath.joinpath(filenm),
-                            targetDir,
-                            )
-                        
-                    # Remove the directory (throw exception if not empty)
-                    os.rmdir(itemPath)
-                    
-                else:
-                    _ = coftc_file_utils.move_file(
-                        itemPath,
-                        self.user_files_dir.joinpath('complete', itemnm),
-                        )
-            
-            ## Download the blobs to local directories/files
-            
-            # Loop through each user
-            with Progress() as progress:
-        
-                applicantLoop = progress.add_task(
-                    "[bright_cyan]Looping through each new applicant",
-                    total=len(df),
-                    )
-            
-                for iditm in df['Primary ID'].values:
-                    # Create a directory for that user in user_files_dir
-                    userFolder = 'user_{}'.format(iditm)
-                    userDir = self.user_files_dir.joinpath(userFolder)
-                    os.mkdir(userDir)
-                    
-                    # Note that the blobs are not in a hierarchical
-                    # namespace, so need to loop through all blobs that
-                    # match the user folder and download each as a file
-                    # in the userDir
-                    blobsToDownload = [x for x in blobList if x.name.startswith('{}/'.format(userFolder))]
-                    progress.console.print(
-                        "Downloading {} files for user {}".format(
-                            len(blobsToDownload),
-                            iditm,
-                            )
-                        )
-                    for blobitm in blobsToDownload:
-                        # Download blob into userDir as same name (first
-                        # need to strip the filename from the blob name)
-                        with open(
-                                userDir.joinpath(
-                                    blobitm.name.replace(
-                                        ':',
-                                        '').replace(
-                                        '{}/'.format(
-                                            userFolder,
-                                            ),
-                                        ''),
-                                    ),
-                                mode="wb",
-                                ) as f:
-                            f.write(container_client.download_blob(blobitm.name).readall())
-                            
-                    progress.update(applicantLoop, advance=1)         
+                print("Extract saved!")       
                     
             print(f"Saving 'all' and 'feedback' exports to {self.user_files_dir.stem} folder")
             
@@ -901,7 +807,7 @@ class Extract:
             alreadyProcessedUsers = []
             
             # Use different fields for certain program(s)
-            if programname == 'spin':
+            if programname in ('spin', 'gardens'):
                 fieldsToUse = [x for x in self.getfoco.table_fields if x[1] in (
                     'id',
                     'first_name',
@@ -1188,7 +1094,7 @@ class Extract:
                             # applicants found above
                             numberEnrolled += int(
                                 re.match(
-                                    r'Once transaction is committed: (\d*) users enrolled.*',
+                                    r'Once transaction is committed: (\d*) users? enrolled.*',
                                     functionMsg
                                 ).group(1)
                             )
@@ -1248,8 +1154,6 @@ class Extract:
             print("Update designations in the database were not reset")
 
         cursor.close()
-                    
-        return(df)
 
     def export_incomplete(self):
         """
