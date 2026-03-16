@@ -807,7 +807,7 @@ class Extract:
             alreadyProcessedUsers = []
             
             # Use different fields for certain program(s)
-            if programname == 'spin':
+            if programname in ('spin', 'gardens'):
                 fieldsToUse = [x for x in self.getfoco.table_fields if x[1] in (
                     'id',
                     'first_name',
