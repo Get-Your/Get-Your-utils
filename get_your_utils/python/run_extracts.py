@@ -1094,7 +1094,7 @@ class Extract:
                             # applicants found above
                             numberEnrolled += int(
                                 re.match(
-                                    r'Once transaction is committed: (\d*) users enrolled.*',
+                                    r'Once transaction is committed: (\d*) users? enrolled.*',
                                     functionMsg
                                 ).group(1)
                             )
@@ -1154,8 +1154,6 @@ class Extract:
             print("Update designations in the database were not reset")
 
         cursor.close()
-                    
-        return(df)
 
     def export_incomplete(self):
         """
